@@ -218,7 +218,7 @@ fi
 # Export ODB++
 if [[ "$SKIP_ODB" == false ]] && [[ -n "$KICAD_PCB" ]]; then
   print_header "Exporting ODB++"
-  ODB_OUTPUT="$OUTPUT_DIR/odb"
+  ODB_OUTPUT="$OUTPUT_DIR/odb.zip"
 
   if kicad-cli pcb export odb \
     --output "$ODB_OUTPUT" \

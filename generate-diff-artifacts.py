@@ -1,0 +1,515 @@
+#!/usr/bin/env python3
+"""
+Generate PDF artifacts from KiCAD diff output using the triptych method.
+
+This script takes the SVG outputs from kidiff and creates:
+1. Combined triptych SVGs showing old (green), new (red), and overlay
+2. PDF files combining all layers (one for PCB, one for schematic)
+"""
+
+import argparse
+import os
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+import subprocess
+import glob
+
+
+def strip_namespace(tag):
+    """Remove namespace from XML tag."""
+    if '}' in tag:
+        return tag.split('}', 1)[1]
+    return tag
+
+
+def apply_color_tint(color_str, tint_type):
+    """
+    Apply a color tint directly to a color value, matching feColorMatrix behavior.
+
+    Args:
+        color_str: Color string (e.g., '#000000', 'rgb(0,0,0)', 'black')
+        tint_type: 'old' for green/cyan tint, 'new' for red/pink tint
+
+    Returns:
+        Modified color string
+    """
+    if not color_str or color_str in ['none', 'transparent']:
+        return color_str
+
+    # Parse hex colors
+    if color_str.startswith('#'):
+        try:
+            hex_color = color_str.lstrip('#')
+            if len(hex_color) == 3:
+                hex_color = ''.join([c*2 for c in hex_color])
+            r = int(hex_color[0:2], 16) / 255.0
+            g = int(hex_color[2:4], 16) / 255.0
+            b = int(hex_color[4:6], 16) / 255.0
+        except ValueError:
+            return color_str
+    else:
+        # For non-hex colors, just return as-is (too complex to parse all formats)
+        return color_str
+
+    # Apply tint matching feColorMatrix filters
+    # Old matrix adds 1.0 to green and blue, new matrix adds 1.0 to red
+    if tint_type == 'old':
+        # Green/cyan tint: boost green and blue channels significantly
+        r_new = r
+        g_new = min(1.0, g + 1.0)  # Add full brightness to green
+        b_new = min(1.0, b + 1.0)  # Add full brightness to blue
+    else:  # 'new'
+        # Red/pink tint: boost red channel significantly
+        r_new = min(1.0, r + 1.0)  # Add full brightness to red
+        g_new = g
+        b_new = b
+
+    # Convert back to hex
+    r_int = int(r_new * 255)
+    g_int = int(g_new * 255)
+    b_int = int(b_new * 255)
+
+    return f'#{r_int:02x}{g_int:02x}{b_int:02x}'
+
+
+def copy_element_recursive(element, parent, svg_ns, tint_type=None):
+    """
+    Recursively copy an element and all its children, preserving vector data.
+    Optionally applies color tinting to stroke/fill attributes.
+
+    Args:
+        element: Source element to copy
+        parent: Parent element to attach to
+        svg_ns: SVG namespace
+        tint_type: 'old' or 'new' for color tinting
+    """
+    # Create new element with same tag
+    tag = strip_namespace(element.tag)
+    attribs = element.attrib.copy()
+
+    # Apply color tinting to fill and stroke attributes
+    if tint_type:
+        if 'fill' in attribs and attribs['fill'] not in ['none', 'transparent']:
+            attribs['fill'] = apply_color_tint(attribs['fill'], tint_type)
+
+        if 'stroke' in attribs and attribs['stroke'] not in ['none', 'transparent']:
+            attribs['stroke'] = apply_color_tint(attribs['stroke'], tint_type)
+
+        # Also handle style attribute
+        if 'style' in attribs:
+            style = attribs['style']
+            style_parts = []
+
+            for part in style.split(';'):
+                if ':' in part:
+                    key, value = part.split(':', 1)
+                    key = key.strip()
+                    value = value.strip()
+
+                    if key == 'fill' and value not in ['none', 'transparent']:
+                        value = apply_color_tint(value, tint_type)
+                    elif key == 'stroke' and value not in ['none', 'transparent']:
+                        value = apply_color_tint(value, tint_type)
+
+                    style_parts.append(f'{key}:{value}')
+                elif part.strip():
+                    style_parts.append(part.strip())
+
+            attribs['style'] = ';'.join(style_parts)
+
+    new_elem = ET.SubElement(parent, f'{{{svg_ns}}}{tag}', attribs)
+
+    # Copy text content
+    if element.text:
+        new_elem.text = element.text
+    if element.tail:
+        new_elem.tail = element.tail
+
+    # Recursively copy children
+    for child in element:
+        copy_element_recursive(child, new_elem, svg_ns, tint_type)
+
+    return new_elem
+
+
+def create_triptych_svg(old_svg_path, new_svg_path, output_svg_path, title=""):
+    """
+    Create a triptych SVG that combines old and new versions with color tinting.
+    Embeds the actual SVG content (not as raster images) to preserve vectors.
+
+    Colors are tinted directly at the element level (not via SVG filters) to ensure
+    vector content is preserved when converting to PDF. Color channels are boosted
+    by adding 1.0 (full brightness) matching the original feColorMatrix behavior:
+    - Old version: Green and blue channels boosted (cyan/green tint)
+    - New version: Red channel boosted (red/pink tint) with 50% opacity at GROUP level
+
+    Opacity is applied at the group level (not individual elements) to prevent
+    overlapping elements from compounding opacity. Modern PDF converters like
+    Inkscape properly preserve group-level opacity as vectors.
+
+    Args:
+        old_svg_path: Path to the old version SVG
+        new_svg_path: Path to the new version SVG
+        output_svg_path: Path to save the combined triptych SVG
+        title: Title to display on the SVG
+    """
+    svg_ns = "http://www.w3.org/2000/svg"
+    xlink_ns = "http://www.w3.org/1999/xlink"
+
+    ET.register_namespace('', svg_ns)
+    ET.register_namespace('xlink', xlink_ns)
+
+    # Parse old and new SVG files
+    try:
+        old_tree = ET.parse(old_svg_path)
+        old_root = old_tree.getroot()
+
+        new_tree = ET.parse(new_svg_path)
+        new_root = new_tree.getroot()
+    except Exception as e:
+        print(f"Error parsing SVG files: {e}")
+        return
+
+    # Get dimensions from old SVG
+    viewbox = old_root.get('viewBox')
+    if viewbox:
+        vb_parts = viewbox.split()
+        width, height = vb_parts[2], vb_parts[3]
+        viewbox_attr = viewbox
+    else:
+        width = old_root.get('width', '1000').rstrip('px').rstrip('mm')
+        height = old_root.get('height', '1000').rstrip('px').rstrip('mm')
+        viewbox_attr = f'0 0 {width} {height}'
+
+    # Create root SVG element
+    svg = ET.Element(f'{{{svg_ns}}}svg', {
+        'xmlns': svg_ns,
+        'xmlns:xlink': xlink_ns,
+        'viewBox': viewbox_attr,
+        'width': width,
+        'height': height,
+        'version': '1.1'
+    })
+
+    # Add title if provided
+    if title:
+        title_elem = ET.SubElement(svg, f'{{{svg_ns}}}title')
+        title_elem.text = title
+
+    # Create defs for filters and copy any defs from source SVGs
+    defs = ET.SubElement(svg, f'{{{svg_ns}}}defs')
+
+    # Copy defs from old SVG (gradients, patterns, etc.)
+    for old_defs in old_root.findall(f'.//{{{svg_ns}}}defs'):
+        for child in old_defs:
+            copy_element_recursive(child, defs, svg_ns, tint_type=None)
+
+    # Copy defs from new SVG
+    for new_defs in new_root.findall(f'.//{{{svg_ns}}}defs'):
+        for child in new_defs:
+            # Avoid duplicates by checking id
+            child_id = child.get('id')
+            if child_id:
+                existing = defs.find(f'.//*[@id="{child_id}"]')
+                if existing is None:
+                    copy_element_recursive(child, defs, svg_ns, tint_type=None)
+            else:
+                copy_element_recursive(child, defs, svg_ns, tint_type=None)
+
+    # Create group for old version with green/cyan tint applied directly to colors
+    old_group = ET.SubElement(svg, f'{{{svg_ns}}}g', {
+        'id': 'old-version'
+    })
+
+    # Copy all children from old SVG root with green tinting
+    for child in old_root:
+        tag = strip_namespace(child.tag)
+        if tag not in ['defs', 'title', 'metadata']:
+            copy_element_recursive(child, old_group, svg_ns, tint_type='old')
+
+    # Create group for new version with red/pink tint and 50% opacity at GROUP level
+    # This ensures overlapping elements don't compound opacity
+    new_group = ET.SubElement(svg, f'{{{svg_ns}}}g', {
+        'id': 'new-version',
+        'opacity': '0.5'
+    })
+
+    # Copy all children from new SVG root with red tinting
+    for child in new_root:
+        tag = strip_namespace(child.tag)
+        if tag not in ['defs', 'title', 'metadata']:
+            copy_element_recursive(child, new_group, svg_ns, tint_type='new')
+
+    # Write output SVG
+    tree = ET.ElementTree(svg)
+    ET.indent(tree, space='  ')
+    tree.write(output_svg_path, encoding='utf-8', xml_declaration=True)
+    print(f"  Created: {output_svg_path}")
+
+
+def find_svg_pairs(diff_output_dir):
+    """
+    Find pairs of SVG files (old and new versions) in the kidiff output directory.
+
+    Returns:
+        dict: Dictionary with keys 'pcb' and 'sch', each containing lists of (old, new, name) tuples
+    """
+    # Find the two commit hash directories
+    subdirs = [d for d in Path(diff_output_dir).iterdir() if d.is_dir() and not d.name.startswith('.')]
+    if len(subdirs) < 2:
+        print(f"Error: Expected 2 commit directories in {diff_output_dir}, found {len(subdirs)}")
+        return {'pcb': [], 'sch': []}
+
+    # Sort to get consistent old/new order (alphabetically, older commits have earlier hashes usually)
+    subdirs.sort()
+    old_dir, new_dir = subdirs[0], subdirs[1]
+
+    print(f"Old version: {old_dir.name}")
+    print(f"New version: {new_dir.name}")
+
+    pairs = {'pcb': [], 'sch': []}
+
+    # Find PCB layer SVGs
+    pcb_old_dir = old_dir / 'pcb'
+    pcb_new_dir = new_dir / 'pcb'
+
+    if pcb_old_dir.exists() and pcb_new_dir.exists():
+        old_svgs = {f.name: f for f in pcb_old_dir.glob('*.svg')}
+        new_svgs = {f.name: f for f in pcb_new_dir.glob('*.svg')}
+
+        # Match pairs
+        common_names = set(old_svgs.keys()) & set(new_svgs.keys())
+        for name in sorted(common_names):
+            pairs['pcb'].append((old_svgs[name], new_svgs[name], name))
+
+    # Find schematic SVGs
+    sch_old_dir = old_dir / 'sch'
+    sch_new_dir = new_dir / 'sch'
+
+    if sch_old_dir.exists() and sch_new_dir.exists():
+        old_svgs = {f.name: f for f in sch_old_dir.glob('*.svg')}
+        new_svgs = {f.name: f for f in sch_new_dir.glob('*.svg')}
+
+        common_names = set(old_svgs.keys()) & set(new_svgs.keys())
+        for name in sorted(common_names):
+            pairs['sch'].append((old_svgs[name], new_svgs[name], name))
+
+    return pairs
+
+
+def svg_to_pdf(svg_path, pdf_path):
+    """
+    Convert a single SVG to PDF preserving vector content and group opacity.
+
+    Inkscape is tried first as it has excellent support for group-level opacity
+    while maintaining full vector quality.
+    """
+    # Try inkscape first - excellent at preserving vectors and group opacity
+    try:
+        result = subprocess.run([
+            'inkscape',
+            '--export-type=pdf',
+            '--export-text-to-path',  # Convert text to paths for compatibility
+            '--export-area-drawing',  # Use drawing bounding box
+            f'--export-filename={pdf_path}',
+            str(svg_path)
+        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        if result.returncode == 0:
+            return True
+        else:
+            print(f"  Inkscape failed for {svg_path.name}: {result.stderr.strip()}")
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"  Inkscape error for {svg_path.name}: {e}")
+
+    # Try svglib + reportlab (good for simple vectors, may not handle group opacity)
+    try:
+        from svglib.svglib import svg2rlg
+        from reportlab.graphics import renderPDF
+
+        drawing = svg2rlg(str(svg_path))
+        if drawing:
+            renderPDF.drawToFile(drawing, str(pdf_path))
+            return True
+    except (ImportError, Exception) as e:
+        # svglib can fail on complex SVGs or unsupported features
+        pass
+
+    # Try rsvg-convert with Cairo backend
+    try:
+        result = subprocess.run([
+            'rsvg-convert',
+            '-f', 'pdf',
+            '-o', str(pdf_path),
+            str(svg_path)
+        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        if result.returncode == 0:
+            return True
+        else:
+            print(f"  rsvg-convert failed for {svg_path.name}: {result.stderr.strip()}")
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"  rsvg-convert error for {svg_path.name}: {e}")
+
+    # Try cairosvg as last resort
+    try:
+        import cairosvg
+        cairosvg.svg2pdf(url=str(svg_path), write_to=str(pdf_path))
+        return True
+    except (ImportError, Exception) as e:
+        print(f"  cairosvg failed for {svg_path.name}: {e}")
+
+    return False
+
+
+def combine_pdfs(pdf_files, output_pdf):
+    """Combine multiple PDF files into one using ghostscript or pdfunite."""
+    if not pdf_files:
+        return False
+
+    # Try pdfunite first (simpler)
+    try:
+        cmd = ['pdfunite'] + [str(f) for f in pdf_files] + [str(output_pdf)]
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    # Fall back to ghostscript
+    try:
+        cmd = ['gs', '-dBATCH', '-dNOPAUSE', '-q', '-sDEVICE=pdfwrite',
+               f'-sOutputFile={output_pdf}'] + [str(f) for f in pdf_files]
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    return False
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Generate PDF artifacts from KiCAD diff output'
+    )
+    parser.add_argument(
+        'diff_dir',
+        help='Path to kidiff output directory containing commit hash subdirectories'
+    )
+    parser.add_argument(
+        '-o', '--output',
+        default='.',
+        help='Output directory for generated artifacts (default: current directory)'
+    )
+    parser.add_argument(
+        '--no-pdf',
+        action='store_true',
+        help='Skip PDF generation, only create triptych SVGs'
+    )
+
+    args = parser.parse_args()
+
+    diff_dir = Path(args.diff_dir)
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if not diff_dir.exists():
+        print(f"Error: Diff directory does not exist: {diff_dir}")
+        return 1
+
+    # Create output subdirectories
+    triptych_dir = output_dir / 'triptych-svgs'
+    triptych_dir.mkdir(exist_ok=True)
+
+    print("Finding SVG pairs...")
+    pairs = find_svg_pairs(diff_dir)
+
+    if not pairs['pcb'] and not pairs['sch']:
+        print("No SVG pairs found!")
+        return 1
+
+    print(f"\nFound {len(pairs['pcb'])} PCB layers and {len(pairs['sch'])} schematic pages")
+
+    # Generate triptych SVGs
+    print("\nGenerating triptych SVGs...")
+
+    pcb_triptychs = []
+    if pairs['pcb']:
+        print(f"\nPCB layers ({len(pairs['pcb'])}):")
+        for old_svg, new_svg, name in pairs['pcb']:
+            output_svg = triptych_dir / f'pcb-{name}'
+            create_triptych_svg(old_svg, new_svg, output_svg, f"PCB: {name}")
+            pcb_triptychs.append(output_svg)
+
+    sch_triptychs = []
+    if pairs['sch']:
+        print(f"\nSchematic pages ({len(pairs['sch'])}):")
+        for old_svg, new_svg, name in pairs['sch']:
+            output_svg = triptych_dir / f'sch-{name}'
+            create_triptych_svg(old_svg, new_svg, output_svg, f"Schematic: {name}")
+            sch_triptychs.append(output_svg)
+
+    if args.no_pdf:
+        print("\nSkipping PDF generation (--no-pdf specified)")
+        return 0
+
+    # Convert SVGs to PDFs and combine
+    print("\nGenerating PDFs...")
+
+    pdf_dir = output_dir / 'pdfs'
+    pdf_dir.mkdir(exist_ok=True)
+
+    # Process PCB
+    if pcb_triptychs:
+        print(f"\nConverting {len(pcb_triptychs)} PCB SVGs to PDF...")
+        pcb_pdfs = []
+        for svg in pcb_triptychs:
+            pdf = pdf_dir / svg.with_suffix('.pdf').name
+            if svg_to_pdf(svg, pdf):
+                pcb_pdfs.append(pdf)
+                print(f"  ✓ {pdf.name}")
+            else:
+                print(f"  ✗ Failed to convert {svg.name}")
+
+        if pcb_pdfs:
+            combined_pcb = output_dir / 'pcb-diff.pdf'
+            if combine_pdfs(pcb_pdfs, combined_pcb):
+                print(f"\n✓ Created combined PCB PDF: {combined_pcb}")
+            else:
+                print(f"\n✗ Failed to combine PCB PDFs")
+                print(f"  Individual PDFs available in: {pdf_dir}")
+
+    # Process Schematic
+    if sch_triptychs:
+        print(f"\nConverting {len(sch_triptychs)} schematic SVGs to PDF...")
+        sch_pdfs = []
+        for svg in sch_triptychs:
+            pdf = pdf_dir / svg.with_suffix('.pdf').name
+            if svg_to_pdf(svg, pdf):
+                sch_pdfs.append(pdf)
+                print(f"  ✓ {pdf.name}")
+            else:
+                print(f"  ✗ Failed to convert {svg.name}")
+
+        if sch_pdfs:
+            combined_sch = output_dir / 'schematic-diff.pdf'
+            if combine_pdfs(sch_pdfs, combined_sch):
+                print(f"\n✓ Created combined schematic PDF: {combined_sch}")
+            else:
+                print(f"\n✗ Failed to combine schematic PDFs")
+                print(f"  Individual PDFs available in: {pdf_dir}")
+
+    print(f"\nAll artifacts saved to: {output_dir}")
+    print(f"  Triptych SVGs: {triptych_dir}")
+    if not args.no_pdf:
+        print(f"  PDFs: {output_dir}")
+
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -24,14 +24,31 @@
         kicad = pkgs.kicad-small;
         kicad-diff-pkg = kicad-diff.packages.${system}.default;
 
+        # Python script for generating diff artifacts
+        python-with-packages = pkgs.python3.withPackages (ps: with ps; [
+          reportlab
+          svglib
+        ]);
+
+        generate-diff-artifacts = pkgs.writeScriptBin "generate-diff-artifacts" ''
+          #!${python-with-packages}/bin/python3
+          ${builtins.readFile ./generate-diff-artifacts.py}
+        '';
+
         kicad-ci = pkgs.writeShellApplication {
           name = "kicad-ci";
           runtimeInputs = [
             kicad
             kicad-diff-pkg
+            generate-diff-artifacts
             pkgs.jq
             pkgs.coreutils
             pkgs.findutils
+            pkgs.python3
+            pkgs.inkscape  # for SVG to PDF conversion (preserves vectors)
+            pkgs.librsvg  # for rsvg-convert (fallback)
+            pkgs.poppler-utils  # for pdfunite
+            pkgs.ghostscript  # fallback for PDF operations
           ];
           text = builtins.readFile ./kicad-ci.sh;
         };

@@ -245,6 +245,8 @@ if [[ "$SKIP_DIFF" == false ]] && [[ -n "$KICAD_PCB" ]] && [[ -n "$COMPARE_REF" 
 
   # Run kidiff and capture output
   DIFF_LOG="$OUTPUT_DIR/diff-log.txt"
+  DIFF_SUCCESS=false
+
   if kidiff \
     -o "$DIFF_OUTPUT" \
     -a "$COMPARE_REF" \
@@ -253,6 +255,7 @@ if [[ "$SKIP_DIFF" == false ]] && [[ -n "$KICAD_PCB" ]] && [[ -n "$COMPARE_REF" 
     "$KICAD_PCB" 2>&1 | tee "$DIFF_LOG"; then
     print_success "Visual diff generated successfully"
     print_info "Output: $DIFF_OUTPUT"
+    DIFF_SUCCESS=true
   else
     DIFF_EXIT_CODE=$?
     # Check if the failure was due to no differences (which is not really an error)
@@ -266,6 +269,28 @@ if [[ "$SKIP_DIFF" == false ]] && [[ -n "$KICAD_PCB" ]] && [[ -n "$COMPARE_REF" 
       if [[ "$EXIT_ON_ERROR" == true ]]; then
         exit 1
       fi
+    fi
+  fi
+
+  # Generate PDF artifacts if diff was successful
+  if [[ "$DIFF_SUCCESS" == true ]]; then
+    print_header "Generating PDF Artifacts"
+    ARTIFACTS_OUTPUT="$OUTPUT_DIR/artifacts"
+
+    if generate-diff-artifacts "$DIFF_OUTPUT" -o "$ARTIFACTS_OUTPUT" 2>&1 | tee "$OUTPUT_DIR/artifacts-log.txt"; then
+      print_success "PDF artifacts generated successfully"
+      print_info "Triptych SVGs: $ARTIFACTS_OUTPUT/triptych-svgs/"
+
+      if [[ -f "$ARTIFACTS_OUTPUT/pcb-diff.pdf" ]]; then
+        print_info "PCB PDF: $ARTIFACTS_OUTPUT/pcb-diff.pdf"
+      fi
+
+      if [[ -f "$ARTIFACTS_OUTPUT/schematic-diff.pdf" ]]; then
+        print_info "Schematic PDF: $ARTIFACTS_OUTPUT/schematic-diff.pdf"
+      fi
+    else
+      print_warning "PDF artifact generation had some issues (check $OUTPUT_DIR/artifacts-log.txt)"
+      print_info "Triptych SVGs may still be available in: $ARTIFACTS_OUTPUT/triptych-svgs/"
     fi
   fi
 elif [[ "$SKIP_DIFF" == false ]] && [[ -z "$COMPARE_REF" ]]; then

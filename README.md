@@ -8,6 +8,7 @@ Automated CI/CD pipeline for KiCAD projects with ERC, DRC, ODB++ export, and vis
 - **Design Rules Check (DRC)**: Validates PCB layout against design rules
 - **ODB++ Export**: Generates industry-standard manufacturing files
 - **Visual Diff**: Creates visual comparisons between PCB versions using kicad-diff
+- **PDF Artifacts**: Automatically generates triptych SVGs and combined PDFs showing layer-by-layer differences
 
 ## Quick Start
 
@@ -89,12 +90,38 @@ ci-output/
 ├── erc-log.txt           # ERC execution log
 ├── drc-report.json       # DRC violations in JSON format
 ├── drc-log.txt           # DRC execution log
-├── odb/                  # ODB++ manufacturing files
-│   └── ...
+├── odb.zip               # ODB++ manufacturing files
 ├── odb-log.txt           # ODB++ export log
-└── diff/                 # Visual diff images (if --compare used)
-    └── ...
+├── diff/                 # Visual diff raw output (if --compare used)
+│   ├── <commit-hash-old>/
+│   │   ├── pcb/          # Old version PCB layer SVGs
+│   │   └── sch/          # Old version schematic SVGs
+│   ├── <commit-hash-new>/
+│   │   ├── pcb/          # New version PCB layer SVGs
+│   │   └── sch/          # New version schematic SVGs
+│   └── web/              # Interactive HTML viewer
+├── diff-log.txt          # Visual diff execution log
+└── artifacts/            # Generated PDF artifacts (if --compare used)
+    ├── pcb-diff.pdf      # Combined PCB layer differences
+    ├── schematic-diff.pdf # Combined schematic differences
+    ├── artifacts-log.txt  # Artifact generation log
+    ├── triptych-svgs/     # Individual triptych SVGs
+    │   ├── pcb-*.svg      # PCB layer triptychs (old+new+overlay)
+    │   └── sch-*.svg      # Schematic triptychs (old+new+overlay)
+    └── pdfs/              # Individual layer PDFs
+        └── ...
 ```
+
+### Triptych Method
+
+The visual diff uses the "triptych" method to show differences:
+- **Green/Cyan tint**: Elements from the old version (green and blue channels boosted)
+- **Red/Pink tint**: Elements from the new version (red channel boosted, 50% opacity)
+- **Yellow/White**: Areas where versions are identical (colors blend)
+- **Pure Green**: Elements that were removed (only in old version)
+- **Pure Red**: Elements that were added (only in new version)
+
+Each triptych SVG embeds the complete vector content from both versions with aggressive color tinting applied directly to fill and stroke attributes (not via rasterizing SVG filters). The new version has group-level opacity (`opacity="0.5"` on the group element) to create the overlay effect without compounding transparency on overlapping elements. This approach ensures all vector data is preserved and properly rendered when converting to PDF via Inkscape, which has excellent support for group opacity. The generated PDFs maintain full vector quality - they can be zoomed infinitely without pixelation, making them perfect for documentation, manufacturing reviews, and design comparisons.
 
 ## CI/CD Integration
 

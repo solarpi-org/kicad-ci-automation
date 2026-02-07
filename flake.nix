@@ -26,6 +26,7 @@
 
         # Python script for generating diff artifacts
         python-with-packages = pkgs.python3.withPackages (ps: with ps; [
+          pillow
           reportlab
           svglib
           pypdf2

@@ -15,37 +15,148 @@ from pathlib import Path
 import subprocess
 import glob
 
+try:
+    from PIL import ImageColor
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
 
 
-
-# Tint colors for diff visualization (complementary colors)
-TINT_COLOR_NEW = '#1ce33d'  # Green for new/added content
-
-
-def calculate_complementary_color(hex_color):
+def parse_css_color(color_str):
     """
-    Calculate the RGB complementary color.
+    Parse any valid CSS color string and return RGB tuple (0-255).
+
+    Uses PIL's ImageColor parser which supports all CSS color formats:
+    hex, rgb(), rgba(), hsl(), hsla(), named colors, etc.
 
     Args:
-        hex_color: Hex color string (e.g., '#33CC4E')
+        color_str: Any valid CSS color string
 
     Returns:
-        Complementary hex color string
+        Tuple of (r, g, b) values in 0-255 range
     """
-    hex_clean = hex_color.lstrip('#')
-    r = int(hex_clean[0:2], 16)
-    g = int(hex_clean[2:4], 16)
-    b = int(hex_clean[4:6], 16)
+    if HAS_PIL:
+        # PIL's ImageColor.getrgb handles all CSS color formats
+        rgb = ImageColor.getrgb(color_str)
+        # Handle RGBA by discarding alpha
+        return rgb[:3] if len(rgb) >= 3 else rgb
+    else:
+        # Fallback to basic hex parsing if PIL not available
+        color_str = color_str.strip()
+        if color_str.startswith('#'):
+            hex_clean = color_str.lstrip('#')
+            if len(hex_clean) == 3:
+                hex_clean = ''.join([c*2 for c in hex_clean])
+            if len(hex_clean) == 6:
+                r = int(hex_clean[0:2], 16)
+                g = int(hex_clean[2:4], 16)
+                b = int(hex_clean[4:6], 16)
+                return (r, g, b)
+        raise ImportError("Pillow (PIL) is required for CSS color parsing.")
 
-    # RGB complement: 255 - each channel
-    r_comp = 255 - r
-    g_comp = 255 - g
-    b_comp = 255 - b
+
+def hsl_to_rgb(h, s, l):
+    """
+    Convert HSL to RGB.
+
+    Args:
+        h: Hue in degrees (0-360)
+        s: Saturation (0-1)
+        l: Lightness (0-1)
+
+    Returns:
+        Tuple of (r, g, b) values in 0-255 range
+    """
+    h = h / 360.0  # Normalize to 0-1
+
+    if s == 0:
+        r = g = b = l
+    else:
+        def hue_to_rgb(p, q, t):
+            if t < 0: t += 1
+            if t > 1: t -= 1
+            if t < 1/6: return p + (q - p) * 6 * t
+            if t < 1/2: return q
+            if t < 2/3: return p + (q - p) * (2/3 - t) * 6
+            return p
+
+        q = l * (1 + s) if l < 0.5 else l + s - l * s
+        p = 2 * l - q
+        r = hue_to_rgb(p, q, h + 1/3)
+        g = hue_to_rgb(p, q, h)
+        b = hue_to_rgb(p, q, h - 1/3)
+
+    return (int(r * 255), int(g * 255), int(b * 255))
+
+
+def rgb_to_hsl(r, g, b):
+    """
+    Convert RGB to HSL.
+
+    Args:
+        r, g, b: RGB values in 0-255 range
+
+    Returns:
+        Tuple of (h, s, l) where h is 0-360, s and l are 0-1
+    """
+    r, g, b = r / 255.0, g / 255.0, b / 255.0
+    max_val = max(r, g, b)
+    min_val = min(r, g, b)
+    l = (max_val + min_val) / 2
+
+    if max_val == min_val:
+        h = s = 0  # achromatic
+    else:
+        d = max_val - min_val
+        s = d / (2 - max_val - min_val) if l > 0.5 else d / (max_val + min_val)
+
+        if max_val == r:
+            h = (g - b) / d + (6 if g < b else 0)
+        elif max_val == g:
+            h = (b - r) / d + 2
+        else:
+            h = (r - g) / d + 4
+        h /= 6
+
+    return (h * 360, s, l)
+
+
+def calculate_complementary_color(color_str):
+    """
+    Calculate the complementary color in HSL space (hue + 180°).
+
+    Args:
+        color_str: CSS color string (hex, rgb, hsl, or named)
+
+    Returns:
+        Complementary color as hex string
+    """
+    # Parse input color to RGB
+    r, g, b = parse_css_color(color_str)
+
+    # Convert to HSL
+    h, s, l = rgb_to_hsl(r, g, b)
+
+    # Rotate hue by 180 degrees for complementary color
+    h_comp = (h + 180) % 360
+
+    # Convert back to RGB
+    r_comp, g_comp, b_comp = hsl_to_rgb(h_comp, s, l)
 
     return f'#{r_comp:02x}{g_comp:02x}{b_comp:02x}'
 
 
-TINT_COLOR_OLD = calculate_complementary_color(TINT_COLOR_NEW)  # Purple for old/removed content
+# Tint colors for diff visualization (complementary colors)
+# TINT_COLOR_NEW accepts any valid CSS color format:
+#   - Hex: '#1ce33d' or '#1e3'
+#   - RGB: 'rgb(28, 227, 61)'
+#   - HSL: 'hsl(133, 79%, 50%)'
+#   - Named: 'green', 'lime', etc.
+# Requires Pillow (PIL) for full CSS color support
+
+TINT_COLOR_NEW = 'hsl(133, 85%, 45%)'  # Green for new/added content
+# TINT_COLOR_NEW = 'hsl(192.1, 88.2%, 53.5%)' # Blue for new/added content
+TINT_COLOR_OLD = calculate_complementary_color(TINT_COLOR_NEW)  # Automatically calculated complementary color
 
 
 def strip_namespace(tag):
@@ -61,7 +172,7 @@ def apply_color_tint(color_str, tint_type):
 
     Args:
         color_str: Color string (e.g., '#000000', 'rgb(0,0,0)', 'black')
-        tint_type: 'old' for purple tint, 'new' for green tint
+        tint_type: 'old' for complementary tint, 'new' for primary tint
 
     Returns:
         Modified color string
@@ -69,7 +180,7 @@ def apply_color_tint(color_str, tint_type):
     if not color_str or color_str in ['none', 'transparent']:
         return color_str
 
-    # Parse original color
+    # Parse original color (only handle hex in SVGs for now)
     if color_str.startswith('#'):
         try:
             hex_color = color_str.lstrip('#')
@@ -81,16 +192,17 @@ def apply_color_tint(color_str, tint_type):
         except ValueError:
             raise ValueError(f"Invalid hex color format: {color_str}")
     else:
-        raise NotImplementedError(f"Color format not supported for tinting: {color_str}")
+        # For non-hex colors in SVG, skip tinting
+        return color_str
 
-    # Get tint color based on type
-    tint_hex = TINT_COLOR_OLD if tint_type == 'old' else TINT_COLOR_NEW
+    # Get tint color based on type and parse using CSS color parser
+    tint_color_str = TINT_COLOR_OLD if tint_type == 'old' else TINT_COLOR_NEW
+    tint_r, tint_g, tint_b = parse_css_color(tint_color_str)
 
-    # Parse tint color
-    tint_hex_clean = tint_hex.lstrip('#')
-    tint_r = int(tint_hex_clean[0:2], 16) / 255.0
-    tint_g = int(tint_hex_clean[2:4], 16) / 255.0
-    tint_b = int(tint_hex_clean[4:6], 16) / 255.0
+    # Convert tint to 0-1 range
+    tint_r = tint_r / 255.0
+    tint_g = tint_g / 255.0
+    tint_b = tint_b / 255.0
 
     # Apply additive tint (add tint color to original, clamped to 1.0)
     r_new = min(1.0, r + tint_r)

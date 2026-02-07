@@ -543,7 +543,83 @@ def get_pdf_content_bbox(pdf_path):
     return None
 
 
-def crop_pdfs_uniform(pdf_files, margin=5):
+def add_footer_to_pdf(pdf_path, footer_text):
+    """
+    Add a footer text to a PDF file with proportional font size.
+
+    Args:
+        pdf_path: Path to PDF file
+        footer_text: Text to display in footer
+    """
+    try:
+        from PyPDF2 import PdfReader, PdfWriter
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.colors import black
+        import io
+    except ImportError:
+        print(f"  Warning: Cannot add footer, missing dependencies")
+        return False
+
+    try:
+        reader = PdfReader(str(pdf_path))
+        writer = PdfWriter()
+
+        for page in reader.pages:
+            # Get page dimensions from mediabox
+            page_width = float(page.mediabox.width)
+            page_height = float(page.mediabox.height)
+
+            # Get the lower-left corner offset
+            llx = float(page.mediabox.lower_left[0])
+            lly = float(page.mediabox.lower_left[1])
+
+            # Calculate proportional font size (2.5% of page height, clamped between 6-10pt)
+            font_size = max(1, min(10, page_height * 0.025))
+
+            # Create a new PDF with just the footer text
+            packet = io.BytesIO()
+            can = canvas.Canvas(packet, pagesize=(page_width, page_height))
+
+            # Set font, size, and color
+            can.setFont("Helvetica", font_size)
+            can.setFillColor(black)
+
+            # Calculate text position (centered at bottom with small margin from crop edge)
+            text_width = can.stringWidth(footer_text, "Helvetica", font_size)
+            x_pos = llx + (page_width - text_width) / 2
+            y_pos = lly + font_size * 0.4  # Position based on font size
+
+            x_pos = 0
+            y_pos = 0
+
+            # Draw the text
+            can.drawString(x_pos, y_pos, footer_text)
+            can.save()
+
+            # Move to the beginning of the BytesIO buffer
+            packet.seek(0)
+            footer_pdf = PdfReader(packet)
+            footer_page = footer_pdf.pages[0]
+
+            # Merge the footer onto the page
+            page.merge_page(footer_page)
+            writer.add_page(page)
+
+        # Write to temporary file
+        tmp_path = pdf_path.with_suffix('.tmp.pdf')
+        with open(str(tmp_path), 'wb') as output_file:
+            writer.write(output_file)
+
+        # Replace original
+        tmp_path.replace(pdf_path)
+        return True
+
+    except Exception as e:
+        print(f"  Error adding footer to {pdf_path.name}: {e}")
+        return False
+
+
+def crop_pdfs_uniform(pdf_files, margin=5, add_footer_space=False):
     """
     Crop all PDF files to the same bounding box (size of biggest content).
 
@@ -553,6 +629,7 @@ def crop_pdfs_uniform(pdf_files, margin=5):
     Args:
         pdf_files: List of PDF file paths to crop in-place
         margin: Margin to add around content in points (default: 5)
+        add_footer_space: If True, add proportional space at bottom for footer (default: False)
     """
     if not pdf_files:
         return
@@ -589,9 +666,13 @@ def crop_pdfs_uniform(pdf_files, margin=5):
     max_urx = max(bbox[2] for _, bbox in bboxes)
     max_ury = max(bbox[3] for _, bbox in bboxes)
 
-    # Add margin
+    # Calculate footer margin proportionally if needed (10% of content height, min 10pt)
+    content_height_raw = max_ury - min_lly
+    footer_margin = max(10, content_height_raw * 0.10) if add_footer_space else 0
+
+    # Add margin (extra space at bottom for footer)
     min_llx -= margin
-    min_lly -= margin
+    min_lly -= (margin + footer_margin)  # Extra space at bottom for footer
     max_urx += margin
     max_ury += margin
 
@@ -764,7 +845,17 @@ def main():
 
         if pcb_pdfs:
             print(f"\nCropping {len(pcb_pdfs)} PCB PDFs to uniform size...")
-            crop_pdfs_uniform(pcb_pdfs, margin=5)
+            crop_pdfs_uniform(pcb_pdfs, margin=5, add_footer_space=True)
+
+            print(f"\nAdding layer labels to {len(pcb_pdfs)} PCB PDFs...")
+            for pdf in pcb_pdfs:
+                # Extract layer name from filename (e.g., 'pcb-F.Cu.svg.pdf' -> 'F.Cu')
+                layer_name = pdf.stem.replace('pcb-', '', 1).replace('.svg', '')
+                footer_text = f"Layer: {layer_name}"
+                if add_footer_to_pdf(pdf, footer_text):
+                    print(f"  ✓ Added footer to {pdf.name}")
+                else:
+                    print(f"  ✗ Failed to add footer to {pdf.name}")
 
             combined_pcb = output_dir / 'pcb-diff.pdf'
             if combine_pdfs(pcb_pdfs, combined_pcb):
@@ -787,7 +878,7 @@ def main():
 
         if sch_pdfs:
             print(f"\nCropping {len(sch_pdfs)} schematic PDFs to uniform size...")
-            crop_pdfs_uniform(sch_pdfs, margin=5)
+            crop_pdfs_uniform(sch_pdfs, margin=5, add_footer_space=False)
 
             combined_sch = output_dir / 'schematic-diff.pdf'
             if combine_pdfs(sch_pdfs, combined_sch):

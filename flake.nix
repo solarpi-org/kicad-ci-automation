@@ -28,6 +28,7 @@
         python-with-packages = pkgs.python3.withPackages (ps: with ps; [
           reportlab
           svglib
+          pypdf2
         ]);
 
         generate-diff-artifacts = pkgs.writeScriptBin "generate-diff-artifacts" ''
@@ -47,8 +48,8 @@
             pkgs.python3
             pkgs.inkscape  # for SVG to PDF conversion (preserves vectors)
             pkgs.librsvg  # for rsvg-convert (fallback)
-            pkgs.poppler-utils  # for pdfunite
-            pkgs.ghostscript  # fallback for PDF operations
+            pkgs.poppler-utils  # for pdfunite and pdfinfo
+            pkgs.ghostscript  # for PDF operations and cropping
           ];
           text = builtins.readFile ./kicad-ci.sh;
         };

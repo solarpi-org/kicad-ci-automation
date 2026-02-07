@@ -311,7 +311,7 @@ def svg_to_pdf(svg_path, pdf_path):
             'inkscape',
             '--export-type=pdf',
             '--export-text-to-path',  # Convert text to paths for compatibility
-            '--export-area-drawing',  # Use drawing bounding box
+            '--export-area-page',  # Use page area
             f'--export-filename={pdf_path}',
             str(svg_path)
         ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -326,45 +326,188 @@ def svg_to_pdf(svg_path, pdf_path):
         print(f"  Inkscape error for {svg_path.name}: {e}")
 
     # Try svglib + reportlab (good for simple vectors, may not handle group opacity)
-    try:
-        from svglib.svglib import svg2rlg
-        from reportlab.graphics import renderPDF
+    # try:
+    #     from svglib.svglib import svg2rlg
+    #     from reportlab.graphics import renderPDF
 
-        drawing = svg2rlg(str(svg_path))
-        if drawing:
-            renderPDF.drawToFile(drawing, str(pdf_path))
-            return True
-    except (ImportError, Exception) as e:
-        # svglib can fail on complex SVGs or unsupported features
-        pass
+    #     drawing = svg2rlg(str(svg_path))
+    #     if drawing:
+    #         renderPDF.drawToFile(drawing, str(pdf_path))
+    #         return True
+    # except (ImportError, Exception) as e:
+    #     # svglib can fail on complex SVGs or unsupported features
+    #     pass
 
-    # Try rsvg-convert with Cairo backend
-    try:
-        result = subprocess.run([
-            'rsvg-convert',
-            '-f', 'pdf',
-            '-o', str(pdf_path),
-            str(svg_path)
-        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # # Try rsvg-convert with Cairo backend
+    # try:
+    #     result = subprocess.run([
+    #         'rsvg-convert',
+    #         '-f', 'pdf',
+    #         '-o', str(pdf_path),
+    #         str(svg_path)
+    #     ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-        if result.returncode == 0:
-            return True
-        else:
-            print(f"  rsvg-convert failed for {svg_path.name}: {result.stderr.strip()}")
-    except FileNotFoundError:
-        pass
-    except Exception as e:
-        print(f"  rsvg-convert error for {svg_path.name}: {e}")
+    #     if result.returncode == 0:
+    #         return True
+    #     else:
+    #         print(f"  rsvg-convert failed for {svg_path.name}: {result.stderr.strip()}")
+    # except FileNotFoundError:
+    #     pass
+    # except Exception as e:
+    #     print(f"  rsvg-convert error for {svg_path.name}: {e}")
 
-    # Try cairosvg as last resort
-    try:
-        import cairosvg
-        cairosvg.svg2pdf(url=str(svg_path), write_to=str(pdf_path))
-        return True
-    except (ImportError, Exception) as e:
-        print(f"  cairosvg failed for {svg_path.name}: {e}")
+    # # Try cairosvg as last resort
+    # try:
+    #     import cairosvg
+    #     cairosvg.svg2pdf(url=str(svg_path), write_to=str(pdf_path))
+    #     return True
+    # except (ImportError, Exception) as e:
+    #     print(f"  cairosvg failed for {svg_path.name}: {e}")
 
     return False
+
+
+def get_pdf_content_bbox(pdf_path):
+    """
+    Get the bounding box of actual content in a PDF using ghostscript.
+
+    Args:
+        pdf_path: Path to PDF file
+
+    Returns:
+        tuple: (llx, lly, urx, ury) bounding box or None
+    """
+    try:
+        result = subprocess.run([
+            'gs',
+            '-q',
+            '-dNOPAUSE',
+            '-dBATCH',
+            '-sDEVICE=bbox',
+            str(pdf_path)
+        ], capture_output=True, text=True)
+
+        # Parse bbox from stderr (gs outputs bbox info there)
+        for line in result.stderr.split('\n'):
+            if line.startswith('%%BoundingBox:'):
+                parts = line.split(':')[1].strip().split()
+                if len(parts) == 4:
+                    return tuple(float(x) for x in parts)
+    except Exception as e:
+        print(f"  Error getting bbox for {pdf_path.name}: {e}")
+
+    return None
+
+
+def crop_pdfs_uniform(pdf_files, margin=28):
+    """
+    Crop all PDF files to the same bounding box (size of biggest content).
+
+    Uses ghostscript to detect content bounds, then PyPDF2 to apply uniform cropping.
+    Maximum size is capped at A4 landscape (297mm x 210mm).
+
+    Args:
+        pdf_files: List of PDF file paths to crop in-place
+        margin: Margin to add around content in points (default: 28 = 10mm)
+    """
+    if not pdf_files:
+        return
+
+    try:
+        from PyPDF2 import PdfReader, PdfWriter
+        from PyPDF2.generic import RectangleObject
+    except ImportError:
+        print("  Warning: PyPDF2 not available, skipping PDF cropping")
+        return
+
+    # A4 landscape dimensions in points (1 point = 1/72 inch)
+    A4_LANDSCAPE_WIDTH = 841.89  # 297mm
+    A4_LANDSCAPE_HEIGHT = 595.28  # 210mm
+
+    print("  Analyzing content bounds...")
+
+    # First pass: get bounding box for each PDF
+    bboxes = []
+    for pdf_path in pdf_files:
+        bbox = get_pdf_content_bbox(pdf_path)
+        if bbox:
+            bboxes.append((pdf_path, bbox))
+        else:
+            print(f"  Warning: Could not get bbox for {pdf_path.name}")
+
+    if not bboxes:
+        print("  Error: Could not determine bounding boxes")
+        return
+
+    # Find the maximum bounding box that encompasses all content
+    min_llx = min(bbox[0] for _, bbox in bboxes)
+    min_lly = min(bbox[1] for _, bbox in bboxes)
+    max_urx = max(bbox[2] for _, bbox in bboxes)
+    max_ury = max(bbox[3] for _, bbox in bboxes)
+
+    # Add margin
+    min_llx -= margin
+    min_lly -= margin
+    max_urx += margin
+    max_ury += margin
+
+    content_width = max_urx - min_llx
+    content_height = max_ury - min_lly
+
+    # Cap at A4 landscape size
+    if content_width > A4_LANDSCAPE_WIDTH:
+        print(f"  Warning: Content width ({content_width:.1f}pt) exceeds A4 landscape, capping to {A4_LANDSCAPE_WIDTH:.1f}pt")
+        center_x = (min_llx + max_urx) / 2
+        min_llx = center_x - A4_LANDSCAPE_WIDTH / 2
+        max_urx = center_x + A4_LANDSCAPE_WIDTH / 2
+        content_width = A4_LANDSCAPE_WIDTH
+
+    if content_height > A4_LANDSCAPE_HEIGHT:
+        print(f"  Warning: Content height ({content_height:.1f}pt) exceeds A4 landscape, capping to {A4_LANDSCAPE_HEIGHT:.1f}pt")
+        center_y = (min_lly + max_ury) / 2
+        min_lly = center_y - A4_LANDSCAPE_HEIGHT / 2
+        max_ury = center_y + A4_LANDSCAPE_HEIGHT / 2
+        content_height = A4_LANDSCAPE_HEIGHT
+
+    print(f"  Unified crop area: {content_width:.1f} x {content_height:.1f} points ({content_width/72*25.4:.1f} x {content_height/72*25.4:.1f} mm)")
+
+    # Second pass: apply uniform crop to all PDFs
+    for pdf_path, bbox in bboxes:
+        try:
+            reader = PdfReader(str(pdf_path))
+            writer = PdfWriter()
+
+            for page in reader.pages:
+                # Set the crop box (what's visible)
+                page.cropbox = RectangleObject([
+                    min_llx,
+                    min_lly,
+                    max_urx,
+                    max_ury
+                ])
+
+                # Also set mediabox to the crop box for clean output
+                page.mediabox = RectangleObject([
+                    min_llx,
+                    min_lly,
+                    max_urx,
+                    max_ury
+                ])
+
+                writer.add_page(page)
+
+            # Write back to original file
+            tmp_path = pdf_path.with_suffix('.tmp.pdf')
+            with open(str(tmp_path), 'wb') as output_file:
+                writer.write(output_file)
+
+            # Replace original
+            tmp_path.replace(pdf_path)
+
+        except Exception as e:
+            print(f"  Error cropping {pdf_path.name}: {e}")
+
+    print(f"  ✓ Applied uniform crop to all PDFs")
 
 
 def combine_pdfs(pdf_files, output_pdf):
@@ -381,13 +524,13 @@ def combine_pdfs(pdf_files, output_pdf):
         pass
 
     # Fall back to ghostscript
-    try:
-        cmd = ['gs', '-dBATCH', '-dNOPAUSE', '-q', '-sDEVICE=pdfwrite',
-               f'-sOutputFile={output_pdf}'] + [str(f) for f in pdf_files]
-        subprocess.run(cmd, check=True, capture_output=True)
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
+    # try:
+    #     cmd = ['gs', '-dBATCH', '-dNOPAUSE', '-q', '-sDEVICE=pdfwrite',
+    #            f'-sOutputFile={output_pdf}'] + [str(f) for f in pdf_files]
+    #     subprocess.run(cmd, check=True, capture_output=True)
+    #     return True
+    # except (subprocess.CalledProcessError, FileNotFoundError):
+    #     pass
 
     return False
 
@@ -476,6 +619,9 @@ def main():
                 print(f"  ✗ Failed to convert {svg.name}")
 
         if pcb_pdfs:
+            print(f"\nCropping {len(pcb_pdfs)} PCB PDFs to uniform size...")
+            crop_pdfs_uniform(pcb_pdfs, margin=28)  # 10mm margin
+
             combined_pcb = output_dir / 'pcb-diff.pdf'
             if combine_pdfs(pcb_pdfs, combined_pcb):
                 print(f"\n✓ Created combined PCB PDF: {combined_pcb}")
@@ -496,6 +642,9 @@ def main():
                 print(f"  ✗ Failed to convert {svg.name}")
 
         if sch_pdfs:
+            print(f"\nCropping {len(sch_pdfs)} schematic PDFs to uniform size...")
+            crop_pdfs_uniform(sch_pdfs, margin=28)  # 10mm margin
+
             combined_sch = output_dir / 'schematic-diff.pdf'
             if combine_pdfs(sch_pdfs, combined_sch):
                 print(f"\n✓ Created combined schematic PDF: {combined_sch}")

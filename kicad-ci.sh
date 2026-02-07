@@ -249,8 +249,8 @@ if [[ "$SKIP_DIFF" == false ]] && [[ -n "$KICAD_PCB" ]] && [[ -n "$COMPARE_REF" 
 
   if kidiff \
     -o "$DIFF_OUTPUT" \
-    -a "$COMPARE_REF" \
-    -b HEAD \
+    -a HEAD \
+    -b "$COMPARE_REF" \
     --webserver-disable \
     "$KICAD_PCB" 2>&1 | tee "$DIFF_LOG"; then
     print_success "Visual diff generated successfully"

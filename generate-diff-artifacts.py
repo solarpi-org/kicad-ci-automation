@@ -3,7 +3,7 @@
 Generate PDF artifacts from KiCAD diff output using the triptych method.
 
 This script takes the SVG outputs from kidiff and creates:
-1. Combined triptych SVGs showing old (green), new (red), and overlay
+1. Combined triptych SVGs showing old (red), new (cyan), and overlay
 2. PDF files combining all layers (one for PCB, one for schematic)
 """
 
@@ -29,7 +29,7 @@ def apply_color_tint(color_str, tint_type):
 
     Args:
         color_str: Color string (e.g., '#000000', 'rgb(0,0,0)', 'black')
-        tint_type: 'old' for green/cyan tint, 'new' for red/pink tint
+        tint_type: 'old' for red/pink tint, 'new' for green/cyan tint
 
     Returns:
         Modified color string
@@ -47,23 +47,22 @@ def apply_color_tint(color_str, tint_type):
             g = int(hex_color[2:4], 16) / 255.0
             b = int(hex_color[4:6], 16) / 255.0
         except ValueError:
-            return color_str
+            raise ValueError(f"Invalid hex color format: {color_str}")
     else:
-        # For non-hex colors, just return as-is (too complex to parse all formats)
-        return color_str
-
+        raise NotImplementedError(f"Color format not supported for tinting: {color_str}")
+    
     # Apply tint matching feColorMatrix filters
-    # Old matrix adds 1.0 to green and blue, new matrix adds 1.0 to red
+    # Old matrix adds 1.0 to red, new matrix adds 1.0 to green and blue
     if tint_type == 'old':
-        # Green/cyan tint: boost green and blue channels significantly
-        r_new = r
-        g_new = min(1.0, g + 1.0)  # Add full brightness to green
-        b_new = min(1.0, b + 1.0)  # Add full brightness to blue
-    else:  # 'new'
         # Red/pink tint: boost red channel significantly
         r_new = min(1.0, r + 1.0)  # Add full brightness to red
         g_new = g
         b_new = b
+    else:  # 'new'
+        # Green/cyan tint: boost green and blue channels significantly
+        r_new = r
+        g_new = min(1.0, g + 1.0)  # Add full brightness to green
+        b_new = min(1.0, b + 1.0)  # Add full brightness to blue
 
     # Convert back to hex
     r_int = int(r_new * 255)
@@ -141,8 +140,8 @@ def create_triptych_svg(old_svg_path, new_svg_path, output_svg_path, title=""):
     Colors are tinted directly at the element level (not via SVG filters) to ensure
     vector content is preserved when converting to PDF. Color channels are boosted
     by adding 1.0 (full brightness) matching the original feColorMatrix behavior:
-    - Old version: Green and blue channels boosted (cyan/green tint)
-    - New version: Red channel boosted (red/pink tint) with 50% opacity at GROUP level
+    - Old version: Red channel boosted (red/pink tint)
+    - New version: Green and blue channels boosted (cyan/green tint) with 50% opacity at GROUP level
 
     Opacity is applied at the group level (not individual elements) to prevent
     overlapping elements from compounding opacity. Modern PDF converters like
@@ -217,25 +216,25 @@ def create_triptych_svg(old_svg_path, new_svg_path, output_svg_path, title=""):
             else:
                 copy_element_recursive(child, defs, svg_ns, tint_type=None)
 
-    # Create group for old version with green/cyan tint applied directly to colors
+    # Create group for old version with red/pink tint applied directly to colors
     old_group = ET.SubElement(svg, f'{{{svg_ns}}}g', {
         'id': 'old-version'
     })
 
-    # Copy all children from old SVG root with green tinting
+    # Copy all children from old SVG root with red tinting
     for child in old_root:
         tag = strip_namespace(child.tag)
         if tag not in ['defs', 'title', 'metadata']:
             copy_element_recursive(child, old_group, svg_ns, tint_type='old')
 
-    # Create group for new version with red/pink tint and 50% opacity at GROUP level
+    # Create group for new version with green/cyan tint and 50% opacity at GROUP level
     # This ensures overlapping elements don't compound opacity
     new_group = ET.SubElement(svg, f'{{{svg_ns}}}g', {
         'id': 'new-version',
         'opacity': '0.5'
     })
 
-    # Copy all children from new SVG root with red tinting
+    # Copy all children from new SVG root with cyan tinting
     for child in new_root:
         tag = strip_namespace(child.tag)
         if tag not in ['defs', 'title', 'metadata']:
@@ -261,9 +260,10 @@ def find_svg_pairs(diff_output_dir):
         print(f"Error: Expected 2 commit directories in {diff_output_dir}, found {len(subdirs)}")
         return {'pcb': [], 'sch': []}
 
-    # Sort to get consistent old/new order (alphabetically, older commits have earlier hashes usually)
-    subdirs.sort()
-    old_dir, new_dir = subdirs[0], subdirs[1]
+    # Put HEAD first (new version), then the other (old version)
+    old_dir = [ d for d in subdirs if d.name != 'HEAD' ][0]
+    new_dir = [ d for d in subdirs if d.name == 'HEAD' ][0]
+    # old_dir, new_dir = subdirs[0], subdirs[1]
 
     print(f"Old version: {old_dir.name}")
     print(f"New version: {new_dir.name}")
@@ -399,16 +399,16 @@ def get_pdf_content_bbox(pdf_path):
     return None
 
 
-def crop_pdfs_uniform(pdf_files, margin=28):
+def crop_pdfs_uniform(pdf_files, margin=5):
     """
     Crop all PDF files to the same bounding box (size of biggest content).
 
     Uses ghostscript to detect content bounds, then PyPDF2 to apply uniform cropping.
-    Maximum size is capped at A4 landscape (297mm x 210mm).
+    Maximum size is capped at 297x210 points.
 
     Args:
         pdf_files: List of PDF file paths to crop in-place
-        margin: Margin to add around content in points (default: 28 = 10mm)
+        margin: Margin to add around content in points (default: 5)
     """
     if not pdf_files:
         return
@@ -420,9 +420,9 @@ def crop_pdfs_uniform(pdf_files, margin=28):
         print("  Warning: PyPDF2 not available, skipping PDF cropping")
         return
 
-    # A4 landscape dimensions in points (1 point = 1/72 inch)
-    A4_LANDSCAPE_WIDTH = 841.89  # 297mm
-    A4_LANDSCAPE_HEIGHT = 595.28  # 210mm
+    # Maximum dimensions in points
+    MAX_WIDTH = 297
+    MAX_HEIGHT = 210
 
     print("  Analyzing content bounds...")
 
@@ -454,22 +454,22 @@ def crop_pdfs_uniform(pdf_files, margin=28):
     content_width = max_urx - min_llx
     content_height = max_ury - min_lly
 
-    # Cap at A4 landscape size
-    if content_width > A4_LANDSCAPE_WIDTH:
-        print(f"  Warning: Content width ({content_width:.1f}pt) exceeds A4 landscape, capping to {A4_LANDSCAPE_WIDTH:.1f}pt")
+    # Cap at maximum size
+    if content_width > MAX_WIDTH:
+        print(f"  Warning: Content width ({content_width:.1f}pt) exceeds max, capping to {MAX_WIDTH:.1f}pt")
         center_x = (min_llx + max_urx) / 2
-        min_llx = center_x - A4_LANDSCAPE_WIDTH / 2
-        max_urx = center_x + A4_LANDSCAPE_WIDTH / 2
-        content_width = A4_LANDSCAPE_WIDTH
+        min_llx = center_x - MAX_WIDTH / 2
+        max_urx = center_x + MAX_WIDTH / 2
+        content_width = MAX_WIDTH
 
-    if content_height > A4_LANDSCAPE_HEIGHT:
-        print(f"  Warning: Content height ({content_height:.1f}pt) exceeds A4 landscape, capping to {A4_LANDSCAPE_HEIGHT:.1f}pt")
+    if content_height > MAX_HEIGHT:
+        print(f"  Warning: Content height ({content_height:.1f}pt) exceeds max, capping to {MAX_HEIGHT:.1f}pt")
         center_y = (min_lly + max_ury) / 2
-        min_lly = center_y - A4_LANDSCAPE_HEIGHT / 2
-        max_ury = center_y + A4_LANDSCAPE_HEIGHT / 2
-        content_height = A4_LANDSCAPE_HEIGHT
+        min_lly = center_y - MAX_HEIGHT / 2
+        max_ury = center_y + MAX_HEIGHT / 2
+        content_height = MAX_HEIGHT
 
-    print(f"  Unified crop area: {content_width:.1f} x {content_height:.1f} points ({content_width/72*25.4:.1f} x {content_height/72*25.4:.1f} mm)")
+    print(f"  Unified crop area: {content_width:.1f} x {content_height:.1f} points")
 
     # Second pass: apply uniform crop to all PDFs
     for pdf_path, bbox in bboxes:
@@ -620,7 +620,7 @@ def main():
 
         if pcb_pdfs:
             print(f"\nCropping {len(pcb_pdfs)} PCB PDFs to uniform size...")
-            crop_pdfs_uniform(pcb_pdfs, margin=28)  # 10mm margin
+            crop_pdfs_uniform(pcb_pdfs, margin=5)
 
             combined_pcb = output_dir / 'pcb-diff.pdf'
             if combine_pdfs(pcb_pdfs, combined_pcb):
@@ -643,7 +643,7 @@ def main():
 
         if sch_pdfs:
             print(f"\nCropping {len(sch_pdfs)} schematic PDFs to uniform size...")
-            crop_pdfs_uniform(sch_pdfs, margin=28)  # 10mm margin
+            crop_pdfs_uniform(sch_pdfs, margin=5)
 
             combined_sch = output_dir / 'schematic-diff.pdf'
             if combine_pdfs(sch_pdfs, combined_sch):

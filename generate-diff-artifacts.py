@@ -582,21 +582,20 @@ def add_footer_to_pdf(pdf_path, footer_text):
             # Auto-size font to fit within page width
             # Start with proportional size (3% of height) and reduce if text doesn't fit
             max_font_size = max(4, min(10, page_height * 0.03))
-            min_font_size = 3
+            min_font_size = 2
 
-            # Reserve 10% of width on each side as margin
-            available_width = page_width * 0.8
+            # Reserve 5% of width on each side as margin (use 90% of width)
+            available_width = page_width * 0.90
 
-            # Binary search for optimal font size
-            font_size = max_font_size
-            for test_size in range(int(max_font_size * 10), int(min_font_size * 10) - 1, -1):
+            # Find the largest font size that fits
+            font_size = min_font_size
+            for test_size in range(int(min_font_size * 10), int(max_font_size * 10) + 1):
                 test_size = test_size / 10.0
                 text_width = can.stringWidth(footer_text, "Helvetica", test_size)
                 if text_width <= available_width:
-                    font_size = test_size
-                    break
-            else:
-                font_size = min_font_size
+                    font_size = test_size  # Keep updating to largest that fits
+                else:
+                    break  # Once it doesn't fit, we've found the max
 
             # Set font, size, and color
             can.setFont("Helvetica", font_size)

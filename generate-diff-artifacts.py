@@ -565,32 +565,32 @@ def add_footer_to_pdf(pdf_path, footer_text):
         writer = PdfWriter()
 
         for page in reader.pages:
-            # Get page dimensions from mediabox
-            page_width = float(page.mediabox.width)
-            page_height = float(page.mediabox.height)
-
-            # Get the lower-left corner offset
+            # Get the actual bounding box from mediabox
             llx = float(page.mediabox.lower_left[0])
             lly = float(page.mediabox.lower_left[1])
+            urx = float(page.mediabox.upper_right[0])
+            ury = float(page.mediabox.upper_right[1])
 
-            # Calculate proportional font size (2.5% of page height, clamped between 6-10pt)
-            font_size = max(1, min(10, page_height * 0.025))
+            # Calculate actual width and height
+            page_width = urx - llx
+            page_height = ury - lly
 
-            # Create a new PDF with just the footer text
+            # Calculate proportional font size (3% of page height, clamped between 4-10pt)
+            font_size = max(4, min(10, page_height * 0.03))
+
+            # Create a canvas that matches the full coordinate space
+            # We need to use the upper_right corner to get the full extent
             packet = io.BytesIO()
-            can = canvas.Canvas(packet, pagesize=(page_width, page_height))
+            can = canvas.Canvas(packet, pagesize=(urx, ury))
 
             # Set font, size, and color
             can.setFont("Helvetica", font_size)
             can.setFillColor(black)
 
-            # Calculate text position (centered at bottom with small margin from crop edge)
+            # Calculate text position (centered horizontally, at bottom with margin)
             text_width = can.stringWidth(footer_text, "Helvetica", font_size)
             x_pos = llx + (page_width - text_width) / 2
-            y_pos = lly + font_size * 0.4  # Position based on font size
-
-            x_pos = 0
-            y_pos = 0
+            y_pos = lly + 2  # 2 points from bottom edge
 
             # Draw the text
             can.drawString(x_pos, y_pos, footer_text)

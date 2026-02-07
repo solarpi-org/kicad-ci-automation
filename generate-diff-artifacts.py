@@ -3,7 +3,7 @@
 Generate PDF artifacts from KiCAD diff output using the triptych method.
 
 This script takes the SVG outputs from kidiff and creates:
-1. Combined triptych SVGs showing old (red), new (cyan), and overlay
+1. Combined triptych SVGs showing old (purple), new (green), and overlay
 2. PDF files combining all layers (one for PCB, one for schematic)
 """
 
@@ -16,6 +16,38 @@ import subprocess
 import glob
 
 
+
+
+# Tint colors for diff visualization (complementary colors)
+TINT_COLOR_NEW = '#1ce33d'  # Green for new/added content
+
+
+def calculate_complementary_color(hex_color):
+    """
+    Calculate the RGB complementary color.
+
+    Args:
+        hex_color: Hex color string (e.g., '#33CC4E')
+
+    Returns:
+        Complementary hex color string
+    """
+    hex_clean = hex_color.lstrip('#')
+    r = int(hex_clean[0:2], 16)
+    g = int(hex_clean[2:4], 16)
+    b = int(hex_clean[4:6], 16)
+
+    # RGB complement: 255 - each channel
+    r_comp = 255 - r
+    g_comp = 255 - g
+    b_comp = 255 - b
+
+    return f'#{r_comp:02x}{g_comp:02x}{b_comp:02x}'
+
+
+TINT_COLOR_OLD = calculate_complementary_color(TINT_COLOR_NEW)  # Purple for old/removed content
+
+
 def strip_namespace(tag):
     """Remove namespace from XML tag."""
     if '}' in tag:
@@ -25,11 +57,11 @@ def strip_namespace(tag):
 
 def apply_color_tint(color_str, tint_type):
     """
-    Apply a color tint directly to a color value, matching feColorMatrix behavior.
+    Apply a color tint directly to a color value using complementary colors.
 
     Args:
         color_str: Color string (e.g., '#000000', 'rgb(0,0,0)', 'black')
-        tint_type: 'old' for red/pink tint, 'new' for green/cyan tint
+        tint_type: 'old' for purple tint, 'new' for green tint
 
     Returns:
         Modified color string
@@ -37,7 +69,7 @@ def apply_color_tint(color_str, tint_type):
     if not color_str or color_str in ['none', 'transparent']:
         return color_str
 
-    # Parse hex colors
+    # Parse original color
     if color_str.startswith('#'):
         try:
             hex_color = color_str.lstrip('#')
@@ -50,19 +82,20 @@ def apply_color_tint(color_str, tint_type):
             raise ValueError(f"Invalid hex color format: {color_str}")
     else:
         raise NotImplementedError(f"Color format not supported for tinting: {color_str}")
-    
-    # Apply tint matching feColorMatrix filters
-    # Old matrix adds 1.0 to red, new matrix adds 1.0 to green and blue
-    if tint_type == 'old':
-        # Red/pink tint: boost red channel significantly
-        r_new = min(1.0, r + 1.0)  # Add full brightness to red
-        g_new = g
-        b_new = b
-    else:  # 'new'
-        # Green/cyan tint: boost green and blue channels significantly
-        r_new = r
-        g_new = min(1.0, g + 1.0)  # Add full brightness to green
-        b_new = min(1.0, b + 1.0)  # Add full brightness to blue
+
+    # Get tint color based on type
+    tint_hex = TINT_COLOR_OLD if tint_type == 'old' else TINT_COLOR_NEW
+
+    # Parse tint color
+    tint_hex_clean = tint_hex.lstrip('#')
+    tint_r = int(tint_hex_clean[0:2], 16) / 255.0
+    tint_g = int(tint_hex_clean[2:4], 16) / 255.0
+    tint_b = int(tint_hex_clean[4:6], 16) / 255.0
+
+    # Apply additive tint (add tint color to original, clamped to 1.0)
+    r_new = min(1.0, r + tint_r)
+    g_new = min(1.0, g + tint_g)
+    b_new = min(1.0, b + tint_b)
 
     # Convert back to hex
     r_int = int(r_new * 255)
@@ -138,10 +171,9 @@ def create_triptych_svg(old_svg_path, new_svg_path, output_svg_path, title=""):
     Embeds the actual SVG content (not as raster images) to preserve vectors.
 
     Colors are tinted directly at the element level (not via SVG filters) to ensure
-    vector content is preserved when converting to PDF. Color channels are boosted
-    by adding 1.0 (full brightness) matching the original feColorMatrix behavior:
-    - Old version: Red channel boosted (red/pink tint)
-    - New version: Green and blue channels boosted (cyan/green tint) with 50% opacity at GROUP level
+    vector content is preserved when converting to PDF. Complementary colors are used:
+    - Old version: Purple tint (#CC33B1) - removed/old content
+    - New version: Green tint (#33CC4E) - added/new content with 50% opacity at GROUP level
 
     Opacity is applied at the group level (not individual elements) to prevent
     overlapping elements from compounding opacity. Modern PDF converters like
@@ -216,25 +248,25 @@ def create_triptych_svg(old_svg_path, new_svg_path, output_svg_path, title=""):
             else:
                 copy_element_recursive(child, defs, svg_ns, tint_type=None)
 
-    # Create group for old version with red/pink tint applied directly to colors
+    # Create group for old version with purple tint applied directly to colors
     old_group = ET.SubElement(svg, f'{{{svg_ns}}}g', {
         'id': 'old-version'
     })
 
-    # Copy all children from old SVG root with red tinting
+    # Copy all children from old SVG root with purple tinting
     for child in old_root:
         tag = strip_namespace(child.tag)
         if tag not in ['defs', 'title', 'metadata']:
             copy_element_recursive(child, old_group, svg_ns, tint_type='old')
 
-    # Create group for new version with green/cyan tint and 50% opacity at GROUP level
+    # Create group for new version with green tint and 50% opacity at GROUP level
     # This ensures overlapping elements don't compound opacity
     new_group = ET.SubElement(svg, f'{{{svg_ns}}}g', {
         'id': 'new-version',
         'opacity': '0.5'
     })
 
-    # Copy all children from new SVG root with cyan tinting
+    # Copy all children from new SVG root with green tinting
     for child in new_root:
         tag = strip_namespace(child.tag)
         if tag not in ['defs', 'title', 'metadata']:

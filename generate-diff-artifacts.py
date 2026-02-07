@@ -543,13 +543,79 @@ def get_pdf_content_bbox(pdf_path):
     return None
 
 
-def add_footer_to_pdf(pdf_path, footer_text):
+def calculate_optimal_footer_font_size(pdf_files, footer_texts):
     """
-    Add a footer text to a PDF file with auto-sized font to fit page width.
+    Calculate optimal font size that fits the longest text in the smallest PDF.
+
+    Args:
+        pdf_files: List of PDF file paths
+        footer_texts: List of footer text strings (same order as pdf_files)
+
+    Returns:
+        Optimal font size in points, or None if calculation fails
+    """
+    try:
+        from PyPDF2 import PdfReader
+        from reportlab.pdfgen import canvas
+        import io
+    except ImportError:
+        return None
+
+    if not pdf_files or not footer_texts:
+        return None
+
+    try:
+        # Find the smallest page width and longest text
+        min_page_width = float('inf')
+        longest_text = ""
+
+        for pdf_path, text in zip(pdf_files, footer_texts):
+            reader = PdfReader(str(pdf_path))
+            for page in reader.pages:
+                llx = float(page.mediabox.lower_left[0])
+                urx = float(page.mediabox.upper_right[0])
+                page_width = urx - llx
+                min_page_width = min(min_page_width, page_width)
+
+            if len(text) > len(longest_text):
+                longest_text = text
+
+        # Calculate font size for longest text in smallest width
+        # Use 90% of width as available space
+        available_width = min_page_width * 0.90
+
+        # Create temporary canvas for text width calculations
+        packet = io.BytesIO()
+        can = canvas.Canvas(packet)
+
+        max_font_size = 10
+        min_font_size = 2
+
+        # Find the largest font size that fits
+        font_size = min_font_size
+        for test_size in range(int(min_font_size * 10), int(max_font_size * 10) + 1):
+            test_size = test_size / 10.0
+            text_width = can.stringWidth(longest_text, "Helvetica", test_size)
+            if text_width <= available_width:
+                font_size = test_size
+            else:
+                break
+
+        return font_size
+
+    except Exception as e:
+        print(f"  Warning: Could not calculate optimal font size: {e}")
+        return None
+
+
+def add_footer_to_pdf(pdf_path, footer_text, font_size=None):
+    """
+    Add a footer text to a PDF file.
 
     Args:
         pdf_path: Path to PDF file
         footer_text: Text to display in footer
+        font_size: Font size to use (if None, auto-calculate for this page)
     """
     try:
         from PyPDF2 import PdfReader, PdfWriter
@@ -579,23 +645,21 @@ def add_footer_to_pdf(pdf_path, footer_text):
             packet = io.BytesIO()
             can = canvas.Canvas(packet, pagesize=(urx, ury))
 
-            # Auto-size font to fit within page width
-            # Start with proportional size (3% of height) and reduce if text doesn't fit
-            max_font_size = max(4, min(10, page_height * 0.03))
-            min_font_size = 2
+            # Use provided font size or auto-calculate
+            if font_size is None:
+                max_font_size = max(4, min(10, page_height * 0.03))
+                min_font_size = 2
+                available_width = page_width * 0.90
 
-            # Reserve 5% of width on each side as margin (use 90% of width)
-            available_width = page_width * 0.90
-
-            # Find the largest font size that fits
-            font_size = min_font_size
-            for test_size in range(int(min_font_size * 10), int(max_font_size * 10) + 1):
-                test_size = test_size / 10.0
-                text_width = can.stringWidth(footer_text, "Helvetica", test_size)
-                if text_width <= available_width:
-                    font_size = test_size  # Keep updating to largest that fits
-                else:
-                    break  # Once it doesn't fit, we've found the max
+                # Find the largest font size that fits
+                font_size = min_font_size
+                for test_size in range(int(min_font_size * 10), int(max_font_size * 10) + 1):
+                    test_size = test_size / 10.0
+                    text_width = can.stringWidth(footer_text, "Helvetica", test_size)
+                    if text_width <= available_width:
+                        font_size = test_size
+                    else:
+                        break
 
             # Set font, size, and color
             can.setFont("Helvetica", font_size)
@@ -862,12 +926,20 @@ def main():
             crop_pdfs_uniform(pcb_pdfs, margin=5, add_footer_space=True)
 
             print(f"\nAdding layer labels to {len(pcb_pdfs)} PCB PDFs...")
+            # Prepare all footer texts
+            footer_texts = []
             for pdf in pcb_pdfs:
-                # Extract layer name from filename (e.g., 'pcb-F.Cu.svg.pdf' -> 'F.Cu')
                 layer_name = '-'.join(pdf.stem.replace('.svg', '').split('-')[-2:])
-                print(layer_name)
-                footer_text = f"Layer: {layer_name}"
-                if add_footer_to_pdf(pdf, footer_text):
+                footer_texts.append(f"Layer: {layer_name}")
+
+            # Calculate optimal font size once for all PDFs
+            optimal_font_size = calculate_optimal_footer_font_size(pcb_pdfs, footer_texts)
+            if optimal_font_size:
+                print(f"  Using font size: {optimal_font_size:.1f}pt (fits longest layer name)")
+
+            # Add footers with consistent font size
+            for pdf, footer_text in zip(pcb_pdfs, footer_texts):
+                if add_footer_to_pdf(pdf, footer_text, font_size=optimal_font_size):
                     print(f"  ✓ Added footer to {pdf.name}")
                 else:
                     print(f"  ✗ Failed to add footer to {pdf.name}")

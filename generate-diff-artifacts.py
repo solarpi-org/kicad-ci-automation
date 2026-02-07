@@ -582,14 +582,14 @@ def calculate_optimal_footer_font_size(pdf_files, footer_texts):
 
         # Calculate font size for longest text in smallest width
         # Use 90% of width as available space
-        available_width = min_page_width * 0.90
+        available_width = min_page_width * 0.80
 
         # Create temporary canvas for text width calculations
         packet = io.BytesIO()
         can = canvas.Canvas(packet)
 
         max_font_size = 10
-        min_font_size = 2
+        min_font_size = 1
 
         # Find the largest font size that fits
         font_size = min_font_size
@@ -697,7 +697,7 @@ def add_footer_to_pdf(pdf_path, footer_text, font_size=None):
         return False
 
 
-def crop_pdfs_uniform(pdf_files, margin=5, add_footer_space=False):
+def crop_pdfs_uniform(pdf_files, margin=5, footer_font_size=None):
     """
     Crop all PDF files to the same bounding box (size of biggest content).
 
@@ -707,7 +707,7 @@ def crop_pdfs_uniform(pdf_files, margin=5, add_footer_space=False):
     Args:
         pdf_files: List of PDF file paths to crop in-place
         margin: Margin to add around content in points (default: 5)
-        add_footer_space: If True, add proportional space at bottom for footer (default: False)
+        footer_font_size: If provided, reserve space at bottom based on this font size
     """
     if not pdf_files:
         return
@@ -744,13 +744,19 @@ def crop_pdfs_uniform(pdf_files, margin=5, add_footer_space=False):
     max_urx = max(bbox[2] for _, bbox in bboxes)
     max_ury = max(bbox[3] for _, bbox in bboxes)
 
-    # Calculate footer margin proportionally if needed (10% of content height, min 10pt)
-    content_height_raw = max_ury - min_lly
-    footer_margin = max(10, content_height_raw * 0.10) if add_footer_space else 0
+    # Calculate bottom margin: use larger of regular margin or footer space
+    if footer_font_size:
+        # Footer needs: text height (≈ font_size) + padding above text (2pt) + padding below text (2pt)
+        # Position in add_footer_to_pdf is: y_pos = lly + 2
+        # So we need: 2pt (below) + font_size (text height) + 2pt (above) = font_size + 4pt
+        footer_space = footer_font_size * 1.1 # Add a bit of extra space for safety
+        bottom_margin = max(margin, footer_space)
+    else:
+        bottom_margin = margin
 
-    # Add margin (extra space at bottom for footer)
+    # Add margins
     min_llx -= margin
-    min_lly -= (footer_margin)  # Extra space at bottom for footer
+    min_lly -= bottom_margin  # Use calculated bottom margin (includes footer space)
     max_urx += margin
     max_ury += margin
 
@@ -923,20 +929,22 @@ def main():
 
         if pcb_pdfs:
             print(f"\nCropping {len(pcb_pdfs)} PCB PDFs to uniform size...")
-            crop_pdfs_uniform(pcb_pdfs, margin=5, add_footer_space=True)
+            # Use fixed footer space estimate (will calculate exact font after cropping)
+            crop_pdfs_uniform(pcb_pdfs, margin=5, footer_font_size=6)
 
-            print(f"\nAdding layer labels to {len(pcb_pdfs)} PCB PDFs...")
             # Prepare all footer texts
+            print(f"\nPreparing layer labels for {len(pcb_pdfs)} PCB PDFs...")
             footer_texts = []
             for pdf in pcb_pdfs:
                 layer_name = '-'.join(pdf.stem.replace('.svg', '').split('-')[-2:])
                 footer_texts.append(f"Layer: {layer_name}")
 
-            # Calculate optimal font size once for all PDFs
+            # Calculate optimal font size once for all PDFs (AFTER cropping so dimensions are final)
             optimal_font_size = calculate_optimal_footer_font_size(pcb_pdfs, footer_texts)
             if optimal_font_size:
                 print(f"  Using font size: {optimal_font_size:.1f}pt (fits longest layer name)")
 
+            print(f"\nAdding layer labels to {len(pcb_pdfs)} PCB PDFs...")
             # Add footers with consistent font size
             for pdf, footer_text in zip(pcb_pdfs, footer_texts):
                 if add_footer_to_pdf(pdf, footer_text, font_size=optimal_font_size):
@@ -965,7 +973,7 @@ def main():
 
         if sch_pdfs:
             print(f"\nCropping {len(sch_pdfs)} schematic PDFs to uniform size...")
-            crop_pdfs_uniform(sch_pdfs, margin=5, add_footer_space=False)
+            crop_pdfs_uniform(sch_pdfs, margin=5, footer_font_size=None)
 
             combined_sch = output_dir / 'schematic-diff.pdf'
             if combine_pdfs(sch_pdfs, combined_sch):

@@ -5,10 +5,12 @@ set -euo pipefail
 PROJECT_DIR="."
 OUTPUT_DIR="./ci-output"
 COMPARE_REF=""
+TEMPLATE_DEFINES=""
 SKIP_ERC=false
 SKIP_DRC=false
 SKIP_ODB=false
 SKIP_DIFF=false
+SKIP_TEMPLATE=false
 EXIT_ON_ERROR=false
 
 # Color codes for output
@@ -50,10 +52,12 @@ OPTIONS:
   -p, --project DIR       Project directory (default: current directory)
   -o, --output DIR        Output directory (default: ./ci-output)
   -c, --compare REF       Git reference to compare against (for kicad-diff)
+  -d, --defines FILE      Custom template definitions file (JSON, YAML, or KEY=VALUE)
   --skip-erc              Skip Electrical Rules Check
   --skip-drc              Skip Design Rules Check
   --skip-odb              Skip ODB++ export
   --skip-diff             Skip visual diff generation
+  --skip-template         Skip template placeholder replacement
   --exit-on-error         Exit immediately on first error (default: continue all checks)
   -h, --help              Show this help message
 
@@ -85,6 +89,10 @@ while [[ $# -gt 0 ]]; do
       COMPARE_REF="$2"
       shift 2
       ;;
+    -d|--defines)
+      TEMPLATE_DEFINES="$2"
+      shift 2
+      ;;
     --skip-erc)
       SKIP_ERC=true
       shift
@@ -99,6 +107,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-diff)
       SKIP_DIFF=true
+      shift
+      ;;
+    --skip-template)
+      SKIP_TEMPLATE=true
       shift
       ;;
     --exit-on-error)
@@ -123,8 +135,9 @@ if [[ ! -d "$PROJECT_DIR" ]]; then
   exit 1
 fi
 
-# Create output directory
+# Create output directory and make path absolute
 mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 
 # Find KiCAD project files
 print_header "Finding KiCAD Project Files"
@@ -148,6 +161,77 @@ print_header "KiCAD Version"
 kicad-cli version
 
 OVERALL_STATUS=0
+
+# Run template replacement
+if [[ "$SKIP_TEMPLATE" == false ]]; then
+  print_header "Applying Template Replacements"
+
+  # Get current git SHA
+  CURRENT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+  CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+
+  print_info "Current SHA: $CURRENT_SHA"
+  print_info "Current branch: $CURRENT_BRANCH"
+
+  # Build template command arguments
+  TEMPLATE_ARGS=(--sha "$CURRENT_SHA" --branch "$CURRENT_BRANCH")
+  if [[ -n "$TEMPLATE_DEFINES" ]]; then
+    if [[ -f "$TEMPLATE_DEFINES" ]]; then
+      TEMPLATE_ARGS+=(--defines "$TEMPLATE_DEFINES")
+      print_info "Using custom defines: $TEMPLATE_DEFINES"
+    else
+      print_warning "Custom defines file not found: $TEMPLATE_DEFINES"
+    fi
+  fi
+
+  # Apply templating to PCB
+  if [[ -n "$KICAD_PCB" ]]; then
+    print_info "Processing PCB: $KICAD_PCB"
+    if kicad-template "$KICAD_PCB" "${TEMPLATE_ARGS[@]}" 2>&1 | tee "$OUTPUT_DIR/template-pcb-log.txt"; then
+      print_success "PCB template replacement completed"
+    else
+      print_warning "PCB template replacement had issues (see $OUTPUT_DIR/template-pcb-log.txt)"
+    fi
+  fi
+
+  # Apply templating to schematic
+  if [[ -n "$KICAD_SCH" ]]; then
+    print_info "Processing schematic: $KICAD_SCH"
+    if kicad-template "$KICAD_SCH" "${TEMPLATE_ARGS[@]}" 2>&1 | tee "$OUTPUT_DIR/template-sch-log.txt"; then
+      print_success "Schematic template replacement completed"
+    else
+      print_warning "Schematic template replacement had issues (see $OUTPUT_DIR/template-sch-log.txt)"
+    fi
+  fi
+
+  # Create temporary commit for template changes (needed for kicad-diff)
+  TEMPLATE_COMMIT_MADE=false
+  # Check if project directory is in a git repo
+  if git -C "$PROJECT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    # Change to project directory for git operations
+    pushd "$PROJECT_DIR" > /dev/null
+
+    if git diff --quiet 2>/dev/null; then
+      print_info "No template changes to commit"
+    else
+      print_info "Creating temporary commit for template changes in project directory"
+      # Add the modified files
+      [[ -n "$KICAD_PCB" ]] && git add "$(basename "$KICAD_PCB")" 2>/dev/null || true
+      [[ -n "$KICAD_SCH" ]] && git add "$(basename "$KICAD_SCH")" 2>/dev/null || true
+
+      if git commit -m "temp: Template replacement for CI" --no-verify 2>&1 | tee "$OUTPUT_DIR/template-commit-log.txt"; then
+        TEMPLATE_COMMIT_MADE=true
+        print_success "Template changes committed temporarily"
+      else
+        print_warning "Could not create temporary commit (changes may not be visible in diff)"
+      fi
+    fi
+
+    popd > /dev/null
+  else
+    print_warning "Project directory is not in a git repository - skipping template commit"
+  fi
+fi
 
 # Run ERC (Electrical Rules Check)
 if [[ "$SKIP_ERC" == false ]] && [[ -n "$KICAD_SCH" ]]; then
@@ -240,8 +324,12 @@ fi
 # Run kicad-diff
 if [[ "$SKIP_DIFF" == false ]] && [[ -n "$KICAD_PCB" ]] && [[ -n "$COMPARE_REF" ]]; then
   print_header "Generating Visual Diff"
+
   DIFF_OUTPUT="$OUTPUT_DIR/diff"
   mkdir -p "$DIFF_OUTPUT"
+
+  # Run kidiff from project directory
+  pushd "$PROJECT_DIR" > /dev/null
 
   # Run kidiff and capture output
   DIFF_LOG="$OUTPUT_DIR/diff-log.txt"
@@ -252,7 +340,7 @@ if [[ "$SKIP_DIFF" == false ]] && [[ -n "$KICAD_PCB" ]] && [[ -n "$COMPARE_REF" 
     -a HEAD \
     -b "$COMPARE_REF" \
     --webserver-disable \
-    "$KICAD_PCB" 2>&1 | tee "$DIFF_LOG"; then
+    "$(basename "$KICAD_PCB")" 2>&1 | tee "$DIFF_LOG"; then
     print_success "Visual diff generated successfully"
     print_info "Output: $DIFF_OUTPUT"
     DIFF_SUCCESS=true
@@ -267,10 +355,13 @@ if [[ "$SKIP_DIFF" == false ]] && [[ -n "$KICAD_PCB" ]] && [[ -n "$COMPARE_REF" 
       OVERALL_STATUS=1
 
       if [[ "$EXIT_ON_ERROR" == true ]]; then
+        popd > /dev/null
         exit 1
       fi
     fi
   fi
+
+  popd > /dev/null
 
   # Generate PDF artifacts if diff was successful
   if [[ "$DIFF_SUCCESS" == true ]]; then
@@ -297,6 +388,18 @@ elif [[ "$SKIP_DIFF" == false ]] && [[ -z "$COMPARE_REF" ]]; then
   print_warning "Skipping visual diff: No comparison reference specified (use -c/--compare)"
 elif [[ "$SKIP_DIFF" == false ]]; then
   print_warning "Skipping visual diff: No PCB file found"
+fi
+
+# Clean up temporary commit if it was made
+if [[ "$TEMPLATE_COMMIT_MADE" == true ]]; then
+  print_header "Cleaning Up Template Commit"
+  pushd "$PROJECT_DIR" > /dev/null
+  if git reset --soft HEAD~1 2>&1 | tee "$OUTPUT_DIR/template-cleanup-log.txt"; then
+    print_success "Temporary commit removed (changes remain in working directory)"
+  else
+    print_warning "Could not remove temporary commit - you may need to reset manually"
+  fi
+  popd > /dev/null
 fi
 
 # Summary

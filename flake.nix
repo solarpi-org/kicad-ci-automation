@@ -37,12 +37,18 @@
           ${builtins.readFile ./generate-diff-artifacts.py}
         '';
 
+        # KiCAD templating engine (uses kicad Python API)
+        kicad-template = pkgs.writeShellScriptBin "kicad-template" ''
+          exec ${python-with-packages}/bin/python3 ${./kicad-template.py} "$@"
+        '';
+
         kicad-ci = pkgs.writeShellApplication {
           name = "kicad-ci";
           runtimeInputs = [
             kicad
             kicad-diff-pkg
             generate-diff-artifacts
+            kicad-template
             pkgs.jq
             pkgs.coreutils
             pkgs.findutils

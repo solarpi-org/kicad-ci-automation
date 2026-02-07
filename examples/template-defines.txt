@@ -1,0 +1,16 @@
+# KiCAD Template Definitions - KEY=VALUE Format
+# Lines starting with # are comments
+
+# Project information
+project=Example KiCAD Project
+pcb_rev=Rev A
+author=Engineering Team
+company=ACME Electronics
+
+# License and description
+license=MIT
+description=PCB for solar power management
+
+# Custom fields
+pcb_thickness=1.6mm
+copper_weight=1oz

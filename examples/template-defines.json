@@ -1,0 +1,8 @@
+{
+  "project": "Example KiCAD Project",
+  "pcb_rev": "Rev A",
+  "author": "Engineering Team",
+  "company": "ACME Electronics",
+  "license": "MIT",
+  "description": "PCB for solar power management"
+}

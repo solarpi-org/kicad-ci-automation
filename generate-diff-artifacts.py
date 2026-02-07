@@ -545,7 +545,7 @@ def get_pdf_content_bbox(pdf_path):
 
 def add_footer_to_pdf(pdf_path, footer_text):
     """
-    Add a footer text to a PDF file with proportional font size.
+    Add a footer text to a PDF file with auto-sized font to fit page width.
 
     Args:
         pdf_path: Path to PDF file
@@ -575,13 +575,28 @@ def add_footer_to_pdf(pdf_path, footer_text):
             page_width = urx - llx
             page_height = ury - lly
 
-            # Calculate proportional font size (3% of page height, clamped between 4-10pt)
-            font_size = max(4, min(10, page_height * 0.03))
-
             # Create a canvas that matches the full coordinate space
-            # We need to use the upper_right corner to get the full extent
             packet = io.BytesIO()
             can = canvas.Canvas(packet, pagesize=(urx, ury))
+
+            # Auto-size font to fit within page width
+            # Start with proportional size (3% of height) and reduce if text doesn't fit
+            max_font_size = max(4, min(10, page_height * 0.03))
+            min_font_size = 3
+
+            # Reserve 10% of width on each side as margin
+            available_width = page_width * 0.8
+
+            # Binary search for optimal font size
+            font_size = max_font_size
+            for test_size in range(int(max_font_size * 10), int(min_font_size * 10) - 1, -1):
+                test_size = test_size / 10.0
+                text_width = can.stringWidth(footer_text, "Helvetica", test_size)
+                if text_width <= available_width:
+                    font_size = test_size
+                    break
+            else:
+                font_size = min_font_size
 
             # Set font, size, and color
             can.setFont("Helvetica", font_size)
@@ -672,7 +687,7 @@ def crop_pdfs_uniform(pdf_files, margin=5, add_footer_space=False):
 
     # Add margin (extra space at bottom for footer)
     min_llx -= margin
-    min_lly -= (margin + footer_margin)  # Extra space at bottom for footer
+    min_lly -= (footer_margin)  # Extra space at bottom for footer
     max_urx += margin
     max_ury += margin
 
@@ -850,7 +865,8 @@ def main():
             print(f"\nAdding layer labels to {len(pcb_pdfs)} PCB PDFs...")
             for pdf in pcb_pdfs:
                 # Extract layer name from filename (e.g., 'pcb-F.Cu.svg.pdf' -> 'F.Cu')
-                layer_name = pdf.stem.replace('pcb-', '', 1).replace('.svg', '')
+                layer_name = '-'.join(pdf.stem.replace('.svg', '').split('-')[-2:])
+                print(layer_name)
                 footer_text = f"Layer: {layer_name}"
                 if add_footer_to_pdf(pdf, footer_text):
                     print(f"  ✓ Added footer to {pdf.name}")

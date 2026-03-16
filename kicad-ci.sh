@@ -161,6 +161,8 @@ print_header "KiCAD Version"
 kicad-cli version
 
 OVERALL_STATUS=0
+TEMPLATE_BRANCH=""
+TEMPLATE_COMMIT_MADE=false
 
 # Run template replacement
 if [[ "$SKIP_TEMPLATE" == false ]]; then
@@ -204,27 +206,42 @@ if [[ "$SKIP_TEMPLATE" == false ]]; then
     fi
   fi
 
-  # Create temporary commit for template changes (needed for kicad-diff)
-  TEMPLATE_COMMIT_MADE=false
-  # Check if project directory is in a git repo
+  # Create a temporary CI branch and commit template changes there.
+  # This avoids touching the current branch at all - safe to run locally.
   if git -C "$PROJECT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
-    # Change to project directory for git operations
     pushd "$PROJECT_DIR" > /dev/null
 
     if git diff --quiet 2>/dev/null; then
       print_info "No template changes to commit"
     else
-      print_info "Creating temporary commit for template changes in project directory"
-      # Add the modified files
+      ORIG_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "detached")
+      TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+      TEMPLATE_BRANCH="ci-${ORIG_BRANCH}-${TIMESTAMP}"
+
+      print_info "Creating temporary CI branch: $TEMPLATE_BRANCH"
+
+      # Create branch at current HEAD without switching to it, then commit
+      # using a worktree-style approach: stage files, stash index state, commit
+      # on new branch, restore original index.
+      git branch "$TEMPLATE_BRANCH" HEAD
+
+      # Stage the modified KiCAD files into a temporary index
       [[ -n "$KICAD_PCB" ]] && git add "$(basename "$KICAD_PCB")" 2>/dev/null || true
       [[ -n "$KICAD_SCH" ]] && git add "$(basename "$KICAD_SCH")" 2>/dev/null || true
 
-      if git commit -m "temp: Template replacement for CI" --no-verify 2>&1 | tee "$OUTPUT_DIR/template-commit-log.txt"; then
-        TEMPLATE_COMMIT_MADE=true
-        print_success "Template changes committed temporarily"
-      else
-        print_warning "Could not create temporary commit (changes may not be visible in diff)"
-      fi
+      # Commit onto the new branch without switching (update-ref trick)
+      TREE=$(git write-tree)
+      PARENT=$(git rev-parse HEAD)
+      COMMIT=$(git commit-tree "$TREE" -p "$PARENT" -m "ci: template replacement for diff")
+      git update-ref "refs/heads/$TEMPLATE_BRANCH" "$COMMIT"
+
+      # Restore the index to match HEAD (unstage the staged files)
+      [[ -n "$KICAD_PCB" ]] && git restore --staged "$(basename "$KICAD_PCB")" 2>/dev/null || true
+      [[ -n "$KICAD_SCH" ]] && git restore --staged "$(basename "$KICAD_SCH")" 2>/dev/null || true
+
+      TEMPLATE_COMMIT_MADE=true
+      print_success "Template changes committed to $TEMPLATE_BRANCH (current branch unchanged)"
+      print_info "kidiff will compare against HEAD on $TEMPLATE_BRANCH"
     fi
 
     popd > /dev/null
@@ -335,9 +352,13 @@ if [[ "$SKIP_DIFF" == false ]] && [[ -n "$KICAD_PCB" ]] && [[ -n "$COMPARE_REF" 
   DIFF_LOG="$OUTPUT_DIR/diff-log.txt"
   DIFF_SUCCESS=false
 
+  # If we made a CI branch with template substitutions applied, diff against
+  # that branch's tip so kidiff sees the rendered values. Otherwise use HEAD.
+  DIFF_NEW_REF="${TEMPLATE_BRANCH:-HEAD}"
+
   if kidiff \
     -o "$DIFF_OUTPUT" \
-    -a HEAD \
+    -a "$DIFF_NEW_REF" \
     -b "$COMPARE_REF" \
     --webserver-disable \
     "$(basename "$KICAD_PCB")" 2>&1 | tee "$DIFF_LOG"; then
@@ -390,14 +411,14 @@ elif [[ "$SKIP_DIFF" == false ]]; then
   print_warning "Skipping visual diff: No PCB file found"
 fi
 
-# Clean up temporary commit if it was made
-if [[ "$TEMPLATE_COMMIT_MADE" == true ]]; then
-  print_header "Cleaning Up Template Commit"
+# Clean up temporary CI branch if one was created
+if [[ "$TEMPLATE_COMMIT_MADE" == true ]] && [[ -n "$TEMPLATE_BRANCH" ]]; then
+  print_header "Cleaning Up CI Branch"
   pushd "$PROJECT_DIR" > /dev/null
-  if git reset --soft HEAD~1 2>&1 | tee "$OUTPUT_DIR/template-cleanup-log.txt"; then
-    print_success "Temporary commit removed (changes remain in working directory)"
+  if git branch -D "$TEMPLATE_BRANCH" 2>&1 | tee "$OUTPUT_DIR/template-cleanup-log.txt"; then
+    print_success "Temporary branch $TEMPLATE_BRANCH deleted"
   else
-    print_warning "Could not remove temporary commit - you may need to reset manually"
+    print_warning "Could not delete branch $TEMPLATE_BRANCH - remove it manually with: git branch -D $TEMPLATE_BRANCH"
   fi
   popd > /dev/null
 fi

@@ -1,0 +1,31 @@
+name: CI
+
+# Self-test: verify the kicad-ci flake builds cleanly on every push/PR.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build kicad-ci package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Enable magic-nix-cache
+        uses: DeterminateSystems/magic-nix-cache-action@v9
+
+      - name: Build kicad-ci
+        run: nix build .#kicad-ci #keep:tail:5
+
+      - name: Smoke test — help output
+        run: nix run .#kicad-ci -- --help

@@ -1,0 +1,391 @@
+name: KiCAD CI
+
+# Reusable workflow - called by KiCAD project repos.
+#
+# Usage in a calling workflow:
+#
+#   jobs:
+#     kicad-ci:
+#       uses: solarpi-org/kicad-ci-automation/.github/workflows/kicad-ci.yml@main
+#       with:
+#         project-path: .          # path to KiCAD project within the repo
+#         enable-diff: true        # run visual diff on PRs (default: true)
+#         defines-file: ''         # path to defines.json, relative to project-path
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      project-path:
+        description: "Path to KiCAD project directory within the repo"
+        type: string
+        default: "."
+      enable-diff:
+        description: "Run visual diff on pull requests"
+        type: boolean
+        default: true
+      defines-file:
+        description: "Path to template defines file (JSON/YAML/KEY=VALUE), relative to project-path. Auto-detected if empty."
+        type: string
+        default: ""
+      kicad-ci-ref:
+        description: "Git ref of kicad-ci-automation to use (default: same ref as caller)"
+        type: string
+        default: "main"
+
+jobs:
+  # ── ERC + DRC ──────────────────────────────────────────────────────────────
+  checks:
+    name: ERC & DRC
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    outputs:
+      erc-violations: ${{ steps.erc.outputs.violations }}
+      drc-violations: ${{ steps.drc.outputs.violations }}
+      has-schematic:  ${{ steps.find.outputs.has-schematic }}
+      has-pcb:        ${{ steps.find.outputs.has-pcb }}
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Enable magic-nix-cache
+        uses: DeterminateSystems/magic-nix-cache-action@v9
+
+      - name: Find KiCAD files
+        id: find
+        working-directory: ${{ inputs.project-path }}
+        run: |
+          SCH=$(find . -maxdepth 2 -name "*.kicad_sch" | head -1)
+          PCB=$(find . -maxdepth 2 -name "*.kicad_pcb" | head -1)
+          echo "has-schematic=$([ -n "$SCH" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "has-pcb=$([ -n "$PCB" ] && echo true || echo false)"       >> "$GITHUB_OUTPUT"
+          echo "schematic=$SCH" >> "$GITHUB_OUTPUT"
+          echo "pcb=$PCB"       >> "$GITHUB_OUTPUT"
+
+      - name: Detect defines file
+        id: defines
+        working-directory: ${{ inputs.project-path }}
+        run: |
+          # Explicit input takes priority
+          if [ -n "${{ inputs.defines-file }}" ] && [ -f "${{ inputs.defines-file }}" ]; then
+            echo "path=${{ inputs.defines-file }}" >> "$GITHUB_OUTPUT"
+            echo "Found defines file (explicit): ${{ inputs.defines-file }}"
+          else
+            # Auto-detect common names at project root
+            for candidate in defines.json defines.yaml defines.yml defines.txt; do
+              if [ -f "$candidate" ]; then
+                echo "path=$candidate" >> "$GITHUB_OUTPUT"
+                echo "Auto-detected defines file: $candidate"
+                exit 0
+              fi
+            done
+            echo "path=" >> "$GITHUB_OUTPUT"
+            echo "No defines file found, using built-in placeholders only"
+          fi
+
+      - name: Run kicad-ci (ERC + DRC + ODB++)
+        id: kicad-ci
+        env:
+          DEFINES_ARG: ${{ steps.defines.outputs.path != '' && format('--defines {0}', steps.defines.outputs.path) || '' }}
+        run: |
+          mkdir -p ci-output
+          # Run ERC+DRC+ODB, skip diff (handled in separate job)
+          nix run "github:solarpi-org/kicad-ci-automation/${{ inputs.kicad-ci-ref }}#kicad-ci" -- \
+            --project "${{ inputs.project-path }}" \
+            --output  ci-output \
+            --skip-diff \
+            ${{ env.DEFINES_ARG }} \
+            || true   # never hard-fail; we surface violations via comment
+
+      - name: Parse ERC results
+        id: erc
+        run: |
+          REPORT="ci-output/erc-report.json"
+          if [ -f "$REPORT" ]; then
+            COUNT=$(jq '[.sheets[].violations | length] | add // 0' "$REPORT")
+          else
+            COUNT=0
+          fi
+          echo "violations=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "ERC violations: $COUNT"
+
+      - name: Parse DRC results
+        id: drc
+        run: |
+          REPORT="ci-output/drc-report.json"
+          if [ -f "$REPORT" ]; then
+            COUNT=$(jq '[.violations, .unconnected_items, .schematic_parity] | map(length) | add // 0' "$REPORT")
+          else
+            COUNT=0
+          fi
+          echo "violations=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "DRC violations: $COUNT"
+
+      - name: Upload ERC/DRC reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: erc-drc-reports
+          path: |
+            ci-output/erc-report.json
+            ci-output/drc-report.json
+            ci-output/erc-log.txt
+            ci-output/drc-log.txt
+          retention-days: 30
+
+      - name: Upload ODB++
+        # Only upload ODB on pushes to main/master (not PRs)
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        uses: actions/upload-artifact@v4
+        with:
+          name: odb-plus-plus
+          path: ci-output/odb.zip
+          retention-days: 90
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const ercCount = parseInt('${{ steps.erc.outputs.violations }}') || 0;
+            const drcCount = parseInt('${{ steps.drc.outputs.violations }}') || 0;
+            const total    = ercCount + drcCount;
+
+            const icon  = total === 0 ? '✅' : '⚠️';
+            const ercIcon = ercCount === 0 ? '✅' : '⚠️';
+            const drcIcon = drcCount === 0 ? '✅' : '⚠️';
+
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            let body = `## ${icon} KiCAD CI — ERC & DRC\n\n`;
+            body += `| Check | Result |\n|-------|--------|\n`;
+            body += `| ${ercIcon} ERC | ${ercCount === 0 ? 'No violations' : \`**${ercCount} violation(s)**\`} |\n`;
+            body += `| ${drcIcon} DRC | ${drcCount === 0 ? 'No violations' : \`**${drcCount} violation(s)**\`} |\n`;
+            body += `\n`;
+
+            if (total > 0) {
+              body += `> **${total} total violation(s)** — review the [ERC/DRC reports](${runUrl}) for details.\n\n`;
+            }
+
+            body += `📦 Artifacts: [ERC/DRC reports](${runUrl})\n`;
+            body += `\n<sub>KiCAD CI · [kicad-ci-automation](https://github.com/solarpi-org/kicad-ci-automation)</sub>`;
+
+            // Find existing comment to update rather than spam
+            const marker = '<!-- kicad-ci-checks -->';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner:      context.repo.owner,
+              repo:       context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+
+            const fullBody = marker + '\n' + body;
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner:      context.repo.owner,
+                repo:       context.repo.repo,
+                comment_id: existing.id,
+                body:       fullBody,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner:      context.repo.owner,
+                repo:       context.repo.repo,
+                issue_number: context.issue.number,
+                body:       fullBody,
+              });
+            }
+
+  # ── Visual Diff (PRs only) ─────────────────────────────────────────────────
+  diff:
+    name: Visual Diff
+    runs-on: ubuntu-latest
+    # Only run on PRs and only when enabled
+    if: github.event_name == 'pull_request' && inputs.enable-diff
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Enable magic-nix-cache
+        uses: DeterminateSystems/magic-nix-cache-action@v9
+
+      - name: Detect defines file
+        id: defines
+        working-directory: ${{ inputs.project-path }}
+        run: |
+          if [ -n "${{ inputs.defines-file }}" ] && [ -f "${{ inputs.defines-file }}" ]; then
+            echo "path=${{ inputs.defines-file }}" >> "$GITHUB_OUTPUT"
+          else
+            for candidate in defines.json defines.yaml defines.yml defines.txt; do
+              if [ -f "$candidate" ]; then
+                echo "path=$candidate" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            done
+            echo "path=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Get merge base
+        id: base
+        run: |
+          BASE=$(git merge-base HEAD origin/${{ github.base_ref }})
+          echo "sha=$BASE" >> "$GITHUB_OUTPUT"
+          echo "Merge base: $BASE"
+
+      - name: Run visual diff
+        id: diff
+        env:
+          DEFINES_ARG: ${{ steps.defines.outputs.path != '' && format('--defines {0}', steps.defines.outputs.path) || '' }}
+        run: |
+          mkdir -p ci-output
+          nix run "github:solarpi-org/kicad-ci-automation/${{ inputs.kicad-ci-ref }}#kicad-ci" -- \
+            --project  "${{ inputs.project-path }}" \
+            --output   ci-output \
+            --compare  "${{ steps.base.outputs.sha }}" \
+            --skip-erc \
+            --skip-drc \
+            --skip-odb \
+            ${{ env.DEFINES_ARG }} \
+            || true
+
+          # Surface whether artifacts were produced
+          if [ -f ci-output/artifacts/pcb-diff.pdf ]; then
+            echo "has-pcb-diff=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "has-pcb-diff=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -f ci-output/artifacts/schematic-diff.pdf ]; then
+            echo "has-sch-diff=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "has-sch-diff=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload diff artifacts
+        if: steps.diff.outputs.has-pcb-diff == 'true' || steps.diff.outputs.has-sch-diff == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-diff
+          path: |
+            ci-output/artifacts/pcb-diff.pdf
+            ci-output/artifacts/schematic-diff.pdf
+            ci-output/artifacts/triptych-svgs/
+          retention-days: 30
+
+      - name: Post diff comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const hasPcbDiff = '${{ steps.diff.outputs.has-pcb-diff }}' === 'true';
+            const hasSchDiff = '${{ steps.diff.outputs.has-sch-diff }}' === 'true';
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            let body = `## 🔍 KiCAD CI — Visual Diff\n\n`;
+
+            if (!hasPcbDiff && !hasSchDiff) {
+              body += `No visual changes detected between this PR and \`${{ github.base_ref }}\`.\n`;
+            } else {
+              body += `Changes detected vs \`${{ github.base_ref }}\`:\n\n`;
+              if (hasPcbDiff) body += `- 📐 **PCB diff** — [pcb-diff.pdf](${runUrl})\n`;
+              if (hasSchDiff) body += `- 📋 **Schematic diff** — [schematic-diff.pdf](${runUrl})\n`;
+              body += `\n> Triptych: **purple** = removed, **green** = added\n`;
+            }
+
+            body += `\n<sub>KiCAD CI · [kicad-ci-automation](https://github.com/solarpi-org/kicad-ci-automation)</sub>`;
+
+            const marker = '<!-- kicad-ci-diff -->';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner:        context.repo.owner,
+              repo:         context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+
+            const fullBody = marker + '\n' + body;
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner:      context.repo.owner,
+                repo:       context.repo.repo,
+                comment_id: existing.id,
+                body:       fullBody,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner:      context.repo.owner,
+                repo:       context.repo.repo,
+                issue_number: context.issue.number,
+                body:       fullBody,
+              });
+            }
+
+  # ── Release: attach ODB++ to GitHub Release ───────────────────────────────
+  release:
+    name: Attach ODB++ to Release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Enable magic-nix-cache
+        uses: DeterminateSystems/magic-nix-cache-action@v9
+
+      - name: Detect defines file
+        id: defines
+        working-directory: ${{ inputs.project-path }}
+        run: |
+          if [ -n "${{ inputs.defines-file }}" ] && [ -f "${{ inputs.defines-file }}" ]; then
+            echo "path=${{ inputs.defines-file }}" >> "$GITHUB_OUTPUT"
+          else
+            for candidate in defines.json defines.yaml defines.yml defines.txt; do
+              if [ -f "$candidate" ]; then
+                echo "path=$candidate" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            done
+            echo "path=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Export ODB++
+        env:
+          DEFINES_ARG: ${{ steps.defines.outputs.path != '' && format('--defines {0}', steps.defines.outputs.path) || '' }}
+        run: |
+          mkdir -p ci-output
+          nix run "github:solarpi-org/kicad-ci-automation/${{ inputs.kicad-ci-ref }}#kicad-ci" -- \
+            --project "${{ inputs.project-path }}" \
+            --output  ci-output \
+            --skip-erc \
+            --skip-drc \
+            --skip-diff \
+            ${{ env.DEFINES_ARG }}
+
+      - name: Upload ODB++ to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ci-output/odb.zip

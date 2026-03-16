@@ -229,10 +229,14 @@ if [[ "$SKIP_TEMPLATE" == false ]]; then
       [[ -n "$KICAD_PCB" ]] && git add "$(basename "$KICAD_PCB")" 2>/dev/null || true
       [[ -n "$KICAD_SCH" ]] && git add "$(basename "$KICAD_SCH")" 2>/dev/null || true
 
-      # Commit onto the new branch without switching (update-ref trick)
+      # Commit onto the new branch without switching (update-ref trick).
+      # Set author/committer identity inline so no global git config is needed
+      # (important on bare CI runners).
       TREE=$(git write-tree)
       PARENT=$(git rev-parse HEAD)
-      COMMIT=$(git commit-tree "$TREE" -p "$PARENT" -m "ci: template replacement for diff")
+      COMMIT=$(GIT_AUTHOR_NAME="kicad-ci" GIT_AUTHOR_EMAIL="kicad-ci@localhost" \
+               GIT_COMMITTER_NAME="kicad-ci" GIT_COMMITTER_EMAIL="kicad-ci@localhost" \
+               git commit-tree "$TREE" -p "$PARENT" -m "ci: template replacement for diff")
       git update-ref "refs/heads/$TEMPLATE_BRANCH" "$COMMIT"
 
       # Restore the index to match HEAD (unstage the staged files)

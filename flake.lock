@@ -44,11 +44,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1770378005,
-        "narHash": "sha256-yf2Pc2hoLchYfChPIk5FzarABRwX47jBLSV02sGogFI=",
+        "lastModified": 1773677588,
+        "narHash": "sha256-ubV0osQhW6UnZI4lr4/e1Zv3bAKNr2yiL8gHLNgPNjs=",
         "owner": "murdoa",
         "repo": "KiCad-Diff",
-        "rev": "a9f954c4f98d383dccd885340155d4f4dcbc315a",
+        "rev": "9cac23e6216ed88ae100d968c27c8d7643a4f5f1",
         "type": "github"
       },
       "original": {

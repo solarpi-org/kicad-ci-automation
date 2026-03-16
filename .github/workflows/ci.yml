@@ -1,8 +1,8 @@
 name: CI
 
-# Self-test: verify the flake evaluates cleanly and the shell script passes
-# shellcheck. Does NOT build the kicad-ci package (that would pull the full
-# kicad-small closure - let magic-nix-cache warm up from real project runs).
+# Self-test: verify the flake evaluates and scripts are well-formed.
+# Never builds kicad or any heavy derivation - kicad-small hits
+# cache.nixos.org during real project runs.
 
 on:
   push:
@@ -11,8 +11,8 @@ on:
     branches: [main]
 
 jobs:
-  flake-check:
-    name: Flake eval & shellcheck
+  lint:
+    name: Flake eval & lint
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -23,16 +23,14 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v16
 
-      - name: Check flake evaluates
+      - name: Evaluate flake (no build)
+        # Checks all derivations evaluate to .drv without building anything
         run: nix flake check --no-build
 
-      - name: shellcheck kicad-ci.sh
-        run: |
-          nix shell nixpkgs#shellcheck --command \
-            shellcheck -S warning kicad-ci.sh
+      - name: shellcheck
+        # ubuntu-latest ships shellcheck - no nix needed
+        run: shellcheck -S warning kicad-ci.sh
 
-      - name: shellcheck kicad-template.py (syntax only)
-        run: |
-          nix shell nixpkgs#python3 --command \
-            python3 -m py_compile kicad-template.py generate-diff-artifacts.py
-          echo "Python syntax OK"
+      - name: Python syntax check
+        # ubuntu-latest ships python3 - no nix needed
+        run: python3 -m py_compile kicad-template.py generate-diff-artifacts.py && echo "OK"

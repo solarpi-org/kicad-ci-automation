@@ -59,6 +59,8 @@ jobs:
 
       - name: Enable magic-nix-cache
         uses: DeterminateSystems/magic-nix-cache-action@v9
+        with:
+          use-flakehub: false
 
       - name: Find KiCAD files
         id: find
@@ -226,6 +228,8 @@ jobs:
 
       - name: Enable magic-nix-cache
         uses: DeterminateSystems/magic-nix-cache-action@v9
+        with:
+          use-flakehub: false
 
       - name: Detect defines file
         id: defines
@@ -355,6 +359,8 @@ jobs:
 
       - name: Enable magic-nix-cache
         uses: DeterminateSystems/magic-nix-cache-action@v9
+        with:
+          use-flakehub: false
 
       - name: Detect defines file
         id: defines

@@ -177,26 +177,24 @@ def get_template_values(args):
     return values
 
 
-def process_pcb(pcb_path, template_values, dry_run=False):
+def process_file(file_path, template_values, dry_run=False):
     """
-    Process a .kicad_pcb file and replace template placeholders.
+    Process a KiCAD file and replace template placeholders.
 
-    Note: KiCAD 6+ PCBs are text-based S-expression format,
-    so we can use simple text replacement.
+    KiCAD 6+ files (.kicad_pcb, .kicad_sch) are text-based S-expression
+    format, so simple text replacement is sufficient.
     """
-    print(f"Loading PCB: {pcb_path}")
+    print(f"Loading: {file_path}")
 
     try:
-        with open(pcb_path, 'r', encoding='utf-8') as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
     except Exception as e:
-        print(f"Error reading PCB: {e}")
+        print(f"Error reading file: {e}")
         return False
 
-    original_content = content
     replacements_made = 0
 
-    # Replace all placeholders
     for placeholder, value in template_values.items():
         pattern = f'[{placeholder}]'
         if pattern in content:
@@ -206,50 +204,8 @@ def process_pcb(pcb_path, template_values, dry_run=False):
             replacements_made += count
 
     if replacements_made > 0 and not dry_run:
-        print(f"Saving updated PCB...")
-        with open(pcb_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        print(f"✓ Made {replacements_made} replacement(s)")
-    elif replacements_made > 0:
-        print(f"[DRY RUN] Would make {replacements_made} replacement(s)")
-    else:
-        print("No template placeholders found")
-
-    return True
-
-
-def process_schematic(sch_path, template_values, dry_run=False):
-    """
-    Process a .kicad_sch file and replace template placeholders.
-
-    Note: KiCAD 6+ schematics are text-based S-expression format,
-    so we can use simple text replacement for now.
-    For more complex manipulation, we'd need the full schematic API.
-    """
-    print(f"Loading schematic: {sch_path}")
-
-    try:
-        with open(sch_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-    except Exception as e:
-        print(f"Error reading schematic: {e}")
-        return False
-
-    original_content = content
-    replacements_made = 0
-
-    # Replace all placeholders
-    for placeholder, value in template_values.items():
-        pattern = f'[{placeholder}]'
-        if pattern in content:
-            print(f"  Found '{pattern}' -> '{value}'")
-            count = content.count(pattern)
-            content = content.replace(pattern, value)
-            replacements_made += count
-
-    if replacements_made > 0 and not dry_run:
-        print(f"Saving updated schematic...")
-        with open(sch_path, 'w', encoding='utf-8') as f:
+        print(f"Saving updated file...")
+        with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
         print(f"✓ Made {replacements_made} replacement(s)")
     elif replacements_made > 0:
@@ -335,10 +291,8 @@ Examples:
         return 1
 
     # Process based on file type
-    if file_path.suffix == '.kicad_pcb':
-        success = process_pcb(file_path, template_values, args.dry_run)
-    elif file_path.suffix == '.kicad_sch':
-        success = process_schematic(file_path, template_values, args.dry_run)
+    if file_path.suffix in ('.kicad_pcb', '.kicad_sch'):
+        success = process_file(file_path, template_values, args.dry_run)
     else:
         print(f"Error: Unsupported file type: {file_path.suffix}")
         print("Supported types: .kicad_pcb, .kicad_sch")

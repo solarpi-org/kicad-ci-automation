@@ -75,24 +75,10 @@ jobs:
 
       - name: Detect defines file
         id: defines
-        working-directory: ${{ inputs.project-path }}
-        run: |
-          # Explicit input takes priority
-          if [ -n "${{ inputs.defines-file }}" ] && [ -f "${{ inputs.defines-file }}" ]; then
-            echo "path=${{ inputs.defines-file }}" >> "$GITHUB_OUTPUT"
-            echo "Found defines file (explicit): ${{ inputs.defines-file }}"
-          else
-            # Auto-detect common names at project root
-            for candidate in defines.json defines.yaml defines.yml defines.txt; do
-              if [ -f "$candidate" ]; then
-                echo "path=$candidate" >> "$GITHUB_OUTPUT"
-                echo "Auto-detected defines file: $candidate"
-                exit 0
-              fi
-            done
-            echo "path=" >> "$GITHUB_OUTPUT"
-            echo "No defines file found, using built-in placeholders only"
-          fi
+        uses: ./.github/actions/detect-defines
+        with:
+          defines-file: ${{ inputs.defines-file }}
+          project-path: ${{ inputs.project-path }}
 
       - name: Run kicad-ci (ERC + DRC + ODB++)
         id: kicad-ci
@@ -233,19 +219,10 @@ jobs:
 
       - name: Detect defines file
         id: defines
-        working-directory: ${{ inputs.project-path }}
-        run: |
-          if [ -n "${{ inputs.defines-file }}" ] && [ -f "${{ inputs.defines-file }}" ]; then
-            echo "path=${{ inputs.defines-file }}" >> "$GITHUB_OUTPUT"
-          else
-            for candidate in defines.json defines.yaml defines.yml defines.txt; do
-              if [ -f "$candidate" ]; then
-                echo "path=$candidate" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-            done
-            echo "path=" >> "$GITHUB_OUTPUT"
-          fi
+        uses: ./.github/actions/detect-defines
+        with:
+          defines-file: ${{ inputs.defines-file }}
+          project-path: ${{ inputs.project-path }}
 
       - name: Get merge base
         id: base
@@ -364,19 +341,10 @@ jobs:
 
       - name: Detect defines file
         id: defines
-        working-directory: ${{ inputs.project-path }}
-        run: |
-          if [ -n "${{ inputs.defines-file }}" ] && [ -f "${{ inputs.defines-file }}" ]; then
-            echo "path=${{ inputs.defines-file }}" >> "$GITHUB_OUTPUT"
-          else
-            for candidate in defines.json defines.yaml defines.yml defines.txt; do
-              if [ -f "$candidate" ]; then
-                echo "path=$candidate" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-            done
-            echo "path=" >> "$GITHUB_OUTPUT"
-          fi
+        uses: ./.github/actions/detect-defines
+        with:
+          defines-file: ${{ inputs.defines-file }}
+          project-path: ${{ inputs.project-path }}
 
       - name: Export ODB++
         env:

@@ -1,0 +1,42 @@
+name: Detect KiCAD defines file
+description: >
+  Resolves the template defines file path.  Explicit input takes priority;
+  falls back to auto-detecting common filenames at the project root.
+
+inputs:
+  defines-file:
+    description: Explicit path to defines file (optional)
+    required: false
+    default: ""
+  project-path:
+    description: Path to KiCAD project directory
+    required: false
+    default: "."
+
+outputs:
+  path:
+    description: Resolved path to defines file, or empty string if not found
+    value: ${{ steps.detect.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Detect defines file
+      id: detect
+      shell: bash
+      working-directory: ${{ inputs.project-path }}
+      run: |
+        if [ -n "${{ inputs.defines-file }}" ] && [ -f "${{ inputs.defines-file }}" ]; then
+          echo "path=${{ inputs.defines-file }}" >> "$GITHUB_OUTPUT"
+          echo "Found defines file (explicit): ${{ inputs.defines-file }}"
+          exit 0
+        fi
+        for candidate in defines.json defines.yaml defines.yml defines.txt; do
+          if [ -f "$candidate" ]; then
+            echo "path=$candidate" >> "$GITHUB_OUTPUT"
+            echo "Auto-detected defines file: $candidate"
+            exit 0
+          fi
+        done
+        echo "path=" >> "$GITHUB_OUTPUT"
+        echo "No defines file found, using built-in placeholders only"

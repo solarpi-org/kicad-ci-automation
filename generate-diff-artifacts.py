@@ -469,45 +469,6 @@ def svg_to_pdf(svg_path, pdf_path):
     except Exception as e:
         print(f"  Inkscape error for {svg_path.name}: {e}")
 
-    # Try svglib + reportlab (good for simple vectors, may not handle group opacity)
-    # try:
-    #     from svglib.svglib import svg2rlg
-    #     from reportlab.graphics import renderPDF
-
-    #     drawing = svg2rlg(str(svg_path))
-    #     if drawing:
-    #         renderPDF.drawToFile(drawing, str(pdf_path))
-    #         return True
-    # except (ImportError, Exception) as e:
-    #     # svglib can fail on complex SVGs or unsupported features
-    #     pass
-
-    # # Try rsvg-convert with Cairo backend
-    # try:
-    #     result = subprocess.run([
-    #         'rsvg-convert',
-    #         '-f', 'pdf',
-    #         '-o', str(pdf_path),
-    #         str(svg_path)
-    #     ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-    #     if result.returncode == 0:
-    #         return True
-    #     else:
-    #         print(f"  rsvg-convert failed for {svg_path.name}: {result.stderr.strip()}")
-    # except FileNotFoundError:
-    #     pass
-    # except Exception as e:
-    #     print(f"  rsvg-convert error for {svg_path.name}: {e}")
-
-    # # Try cairosvg as last resort
-    # try:
-    #     import cairosvg
-    #     cairosvg.svg2pdf(url=str(svg_path), write_to=str(pdf_path))
-    #     return True
-    # except (ImportError, Exception) as e:
-    #     print(f"  cairosvg failed for {svg_path.name}: {e}")
-
     return False
 
 
@@ -824,22 +785,12 @@ def combine_pdfs(pdf_files, output_pdf):
     if not pdf_files:
         return False
 
-    # Try pdfunite first (simpler)
     try:
         cmd = ['pdfunite'] + [str(f) for f in pdf_files] + [str(output_pdf)]
         subprocess.run(cmd, check=True, capture_output=True)
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
-
-    # Fall back to ghostscript
-    # try:
-    #     cmd = ['gs', '-dBATCH', '-dNOPAUSE', '-q', '-sDEVICE=pdfwrite',
-    #            f'-sOutputFile={output_pdf}'] + [str(f) for f in pdf_files]
-    #     subprocess.run(cmd, check=True, capture_output=True)
-    #     return True
-    # except (subprocess.CalledProcessError, FileNotFoundError):
-    #     pass
 
     return False
 

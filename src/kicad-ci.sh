@@ -454,15 +454,22 @@ if [[ "$SKIP_PLOTS" == false ]]; then
         --mode-single \
         "$KICAD_PCB" 2>&1 | tee "$OUTPUT_DIR/$(outname "$PCB_STEM" pcb-pdf log)" \
       && kicad-cli pcb export pdf \
-        --output "${PCB_PDF%.pdf}-layers.pdf" \
+        --output "${PCB_PDF%.pdf}-layers" \
         --layers "F.Cu,B.Cu,F.Silkscreen,B.Silkscreen,Edge.Cuts" \
         --include-border-title \
         --mode-multipage \
-        "$KICAD_PCB" 2>&1 | tee -a "$OUTPUT_DIR/$(outname "$PCB_STEM" pcb-pdf log)" \
-      && pdfunite "${PCB_PDF%.pdf}-all.pdf" "${PCB_PDF%.pdf}-layers.pdf" "$PCB_PDF" \
-      && rm -f "${PCB_PDF%.pdf}-all.pdf" "${PCB_PDF%.pdf}-layers.pdf"; then
-        print_success "PCB PDF export completed: $PCB_STEM"
-        print_info "Output: $PCB_PDF"
+        "$KICAD_PCB" 2>&1 | tee -a "$OUTPUT_DIR/$(outname "$PCB_STEM" pcb-pdf log)"; then
+        # multipage mode writes into a directory; find the actual PDF inside it
+        LAYERS_PDF=$(find "${PCB_PDF%.pdf}-layers" -name '*.pdf' | head -1)
+        if [[ -n "$LAYERS_PDF" ]]; then
+          pdfunite "${PCB_PDF%.pdf}-all.pdf" "$LAYERS_PDF" "$PCB_PDF"
+          rm -rf "${PCB_PDF%.pdf}-all.pdf" "${PCB_PDF%.pdf}-layers"
+          print_success "PCB PDF export completed: $PCB_STEM"
+          print_info "Output: $PCB_PDF"
+        else
+          print_error "Multipage PDF not found in output directory for $PCB_STEM"
+          OVERALL_STATUS=1
+        fi
       else
         print_error "PCB PDF export failed for $PCB_STEM"
         OVERALL_STATUS=1

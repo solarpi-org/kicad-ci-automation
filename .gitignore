@@ -3,3 +3,5 @@ result
 kicad-diff/
 ci-output/
 __pycache__/
+sbom.*
+.sbom-hash

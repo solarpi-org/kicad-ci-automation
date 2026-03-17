@@ -180,10 +180,10 @@ kicad-cli version
 
 OVERALL_STATUS=0
 TEMPLATE_BRANCH=""
-TEMPLATE_COMMIT_MADE=false
 # Track files modified by template replacement so we can restore them
 TEMPLATE_MODIFIED_FILES=()
 
+# shellcheck disable=SC2329 # cleanup is invoked indirectly via trap
 cleanup() {
   # Restore template-modified files to their original content
   if [[ ${#TEMPLATE_MODIFIED_FILES[@]} -gt 0 ]]; then
@@ -275,7 +275,7 @@ if [[ "$SKIP_TEMPLATE" == false ]]; then
 
       # Stage the modified KiCAD files into a temporary index
       for f in "${KICAD_PCBS[@]}" "${KICAD_SCHS[@]}"; do
-        [[ -n "$f" ]] && git add "$f" 2>/dev/null || print_warning "Could not stage $f"
+        if [[ -n "$f" ]]; then git add "$f" 2>/dev/null || print_warning "Could not stage $f"; fi
       done
 
       # Commit onto the new branch without switching (update-ref trick).
@@ -290,10 +290,9 @@ if [[ "$SKIP_TEMPLATE" == false ]]; then
 
       # Restore the index to match HEAD (unstage the staged files)
       for f in "${KICAD_PCBS[@]}" "${KICAD_SCHS[@]}"; do
-        [[ -n "$f" ]] && git restore --staged "$f" 2>/dev/null || print_warning "Could not unstage $f"
+        if [[ -n "$f" ]]; then git restore --staged "$f" 2>/dev/null || print_warning "Could not unstage $f"; fi
       done
 
-      TEMPLATE_COMMIT_MADE=true
       print_success "Template changes committed to $TEMPLATE_BRANCH (current branch unchanged)"
       print_info "kidiff will compare against HEAD on $TEMPLATE_BRANCH"
     fi

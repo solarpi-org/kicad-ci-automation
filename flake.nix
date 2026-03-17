@@ -8,6 +8,9 @@
       url = "github:murdoa/KiCad-Diff/nix_kicad_9";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    sbomnix = {
+      url = "github:tiiuae/sbomnix";
+    };
   };
 
   outputs =
@@ -16,6 +19,7 @@
       nixpkgs,
       flake-utils,
       kicad-diff,
+      sbomnix,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -48,6 +52,36 @@
           exec ${python-with-packages}/bin/python3 ${./src/kicad-template.py} "$@"
         '';
 
+        sbomnix-pkg = sbomnix.packages.${system}.default;
+
+        generate-sbom = pkgs.writeShellApplication {
+          name = "generate-sbom";
+          runtimeInputs = [ sbomnix-pkg pkgs.coreutils ];
+          text = ''
+            outdir="''${1:-.}"
+            mkdir -p "$outdir"
+
+            # Cache key: the kicad-ci store path hash. Same closure = same SBOM.
+            store_hash="$(basename "${kicad-ci}" | cut -d- -f1)"
+            cache_marker="$outdir/.sbom-hash"
+
+            if [[ -f "$cache_marker" ]] && [[ "$(cat "$cache_marker")" == "$store_hash" ]] \
+               && [[ -f "$outdir/sbom.cdx.json" ]] \
+               && [[ -f "$outdir/sbom.spdx.json" ]] \
+               && [[ -f "$outdir/sbom.csv" ]]; then
+              echo "SBOM up to date (kicad-ci hash: $store_hash), skipping generation"
+              exit 0
+            fi
+
+            echo "Generating runtime SBOM for kicad-ci ($store_hash)..."
+            sbomnix "''${FLAKE_REF:-.}#default" \
+              --cdx "$outdir/sbom.cdx.json" \
+              --spdx "$outdir/sbom.spdx.json" \
+              --csv "$outdir/sbom.csv"
+            echo -n "$store_hash" > "$cache_marker"
+          '';
+        };
+
         kicad-ci = pkgs.writeShellApplication {
           name = "kicad-ci";
           runtimeInputs = [
@@ -71,6 +105,7 @@
         packages = {
           default = kicad-ci;
           kicad-ci = kicad-ci;
+          generate-sbom = generate-sbom;
         };
 
         apps = {
@@ -81,6 +116,10 @@
           kicad-ci = {
             type = "app";
             program = "${kicad-ci}/bin/kicad-ci";
+          };
+          generate-sbom = {
+            type = "app";
+            program = "${generate-sbom}/bin/generate-sbom";
           };
         };
 

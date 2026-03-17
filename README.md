@@ -222,4 +222,8 @@ By default, the script continues running all checks even if one fails. Use `--ex
 
 ## License
 
-This project integrates kicad-diff which is MIT licensed. See individual component licenses for details.
+This project is licensed under the **MIT License** — see [LICENSE](LICENSE) for the full text.
+
+### Dependencies
+
+- [KiCad-Diff](https://github.com/Gasman2014/KiCad-Diff) (MIT) — Visual diff tool for KiCad PCBs. This project uses a [Nix-packaged fork](https://github.com/murdoa/KiCad-Diff).

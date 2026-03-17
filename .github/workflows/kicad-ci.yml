@@ -492,6 +492,8 @@ jobs:
           echo "ERC: $ERC_COUNT  DRC: $DRC_COUNT  Total: $TOTAL"
 
       - name: Generate SBOM
+        env:
+          FLAKE_REF: "github:solarpi-org/kicad-ci-automation/${{ inputs.kicad-ci-ref }}"
         run: |
           nix run "github:solarpi-org/kicad-ci-automation/${{ inputs.kicad-ci-ref }}#generate-sbom" -- ci-output
 

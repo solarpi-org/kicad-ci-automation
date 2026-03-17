@@ -34,12 +34,12 @@
 
         generate-diff-artifacts = pkgs.writeScriptBin "generate-diff-artifacts" ''
           #!${python-with-packages}/bin/python3
-          ${builtins.readFile ./generate-diff-artifacts.py}
+          ${builtins.readFile ./src/generate-diff-artifacts.py}
         '';
 
         # KiCAD templating engine (uses kicad Python API)
         kicad-template = pkgs.writeShellScriptBin "kicad-template" ''
-          exec ${python-with-packages}/bin/python3 ${./kicad-template.py} "$@"
+          exec ${python-with-packages}/bin/python3 ${./src/kicad-template.py} "$@"
         '';
 
         kicad-ci = pkgs.writeShellApplication {
@@ -58,7 +58,7 @@
             pkgs.poppler-utils  # for pdfunite and pdfinfo
             pkgs.ghostscript  # for PDF operations and cropping
           ];
-          text = builtins.readFile ./kicad-ci.sh;
+          text = builtins.readFile ./src/kicad-ci.sh;
         };
 
       in

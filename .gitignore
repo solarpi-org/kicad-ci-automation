@@ -1,3 +1,4 @@
-result
-kicad-diff
-ci-output
+result/
+kicad-diff/
+ci-output/
+__pycache__/

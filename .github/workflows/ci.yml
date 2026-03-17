@@ -29,8 +29,8 @@ jobs:
 
       - name: shellcheck
         # ubuntu-latest ships shellcheck - no nix needed
-        run: shellcheck -S warning kicad-ci.sh
+        run: shellcheck -S warning src/kicad-ci.sh
 
       - name: Python syntax check
         # ubuntu-latest ships python3 - no nix needed
-        run: python3 -m py_compile kicad-template.py generate-diff-artifacts.py && echo "OK"
+        run: python3 -m py_compile src/kicad-template.py src/generate-diff-artifacts.py && echo "OK"

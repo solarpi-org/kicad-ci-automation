@@ -51,7 +51,7 @@ jobs:
 
     steps:
       - name: Checkout project
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -80,10 +80,23 @@ jobs:
 
       - name: Detect defines file
         id: defines
-        uses: ./.github/actions/detect-defines
-        with:
-          defines-file: ${{ inputs.defines-file }}
-          project-path: ${{ inputs.project-path }}
+        shell: bash
+        working-directory: ${{ inputs.project-path }}
+        run: |
+          if [ -n "${{ inputs.defines-file }}" ] && [ -f "${{ inputs.defines-file }}" ]; then
+            echo "path=${{ inputs.defines-file }}" >> "$GITHUB_OUTPUT"
+            echo "Found defines file (explicit): ${{ inputs.defines-file }}"
+            exit 0
+          fi
+          for candidate in defines.json defines.yaml defines.yml defines.txt; do
+            if [ -f "$candidate" ]; then
+              echo "path=$candidate" >> "$GITHUB_OUTPUT"
+              echo "Auto-detected defines file: $candidate"
+              exit 0
+            fi
+          done
+          echo "path=" >> "$GITHUB_OUTPUT"
+          echo "No defines file found, using built-in placeholders only"
 
       - name: Build output prefix
         id: prefix
@@ -224,7 +237,7 @@ jobs:
 
     steps:
       - name: Checkout project
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -244,10 +257,23 @@ jobs:
 
       - name: Detect defines file
         id: defines
-        uses: ./.github/actions/detect-defines
-        with:
-          defines-file: ${{ inputs.defines-file }}
-          project-path: ${{ inputs.project-path }}
+        shell: bash
+        working-directory: ${{ inputs.project-path }}
+        run: |
+          if [ -n "${{ inputs.defines-file }}" ] && [ -f "${{ inputs.defines-file }}" ]; then
+            echo "path=${{ inputs.defines-file }}" >> "$GITHUB_OUTPUT"
+            echo "Found defines file (explicit): ${{ inputs.defines-file }}"
+            exit 0
+          fi
+          for candidate in defines.json defines.yaml defines.yml defines.txt; do
+            if [ -f "$candidate" ]; then
+              echo "path=$candidate" >> "$GITHUB_OUTPUT"
+              echo "Auto-detected defines file: $candidate"
+              exit 0
+            fi
+          done
+          echo "path=" >> "$GITHUB_OUTPUT"
+          echo "No defines file found, using built-in placeholders only"
 
       - name: Get merge base
         id: base
@@ -362,7 +388,7 @@ jobs:
 
     steps:
       - name: Checkout project
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -382,10 +408,23 @@ jobs:
 
       - name: Detect defines file
         id: defines
-        uses: ./.github/actions/detect-defines
-        with:
-          defines-file: ${{ inputs.defines-file }}
-          project-path: ${{ inputs.project-path }}
+        shell: bash
+        working-directory: ${{ inputs.project-path }}
+        run: |
+          if [ -n "${{ inputs.defines-file }}" ] && [ -f "${{ inputs.defines-file }}" ]; then
+            echo "path=${{ inputs.defines-file }}" >> "$GITHUB_OUTPUT"
+            echo "Found defines file (explicit): ${{ inputs.defines-file }}"
+            exit 0
+          fi
+          for candidate in defines.json defines.yaml defines.yml defines.txt; do
+            if [ -f "$candidate" ]; then
+              echo "path=$candidate" >> "$GITHUB_OUTPUT"
+              echo "Auto-detected defines file: $candidate"
+              exit 0
+            fi
+          done
+          echo "path=" >> "$GITHUB_OUTPUT"
+          echo "No defines file found, using built-in placeholders only"
 
       - name: Find previous release tag
         id: prev-tag

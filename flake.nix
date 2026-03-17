@@ -24,7 +24,7 @@
         kicad = pkgs.kicad-small;
         kicad-diff-pkg = kicad-diff.packages.${system}.default;
 
-        # Python script for generating diff artifacts
+        # Python environment for diff artifact generation and templating
         python-with-packages = pkgs.python3.withPackages (ps: with ps; [
           pillow
           reportlab
@@ -32,12 +32,19 @@
           pypdf2
         ]);
 
-        generate-diff-artifacts = pkgs.writeScriptBin "generate-diff-artifacts" ''
-          #!${python-with-packages}/bin/python3
-          ${builtins.readFile ./src/generate-diff-artifacts.py}
+        # Package source so Nix store gets the kicad_ci module tree
+        kicad-ci-src = pkgs.runCommand "kicad-ci-src" {} ''
+          mkdir -p $out
+          cp -r ${./src/kicad_ci} $out/kicad_ci
+          cp ${./src/kicad_ci/cli.py} $out/generate-diff-artifacts.py
         '';
 
-        # KiCAD templating engine (uses kicad Python API)
+        generate-diff-artifacts = pkgs.writeShellScriptBin "generate-diff-artifacts" ''
+          exec ${python-with-packages}/bin/python3 -c \
+            "import sys; sys.path.insert(0, '${kicad-ci-src}'); from kicad_ci.cli import main; sys.exit(main())" \
+            "$@"
+        '';
+
         kicad-template = pkgs.writeShellScriptBin "kicad-template" ''
           exec ${python-with-packages}/bin/python3 ${./src/kicad-template.py} "$@"
         '';

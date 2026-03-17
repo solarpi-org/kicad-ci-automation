@@ -33,4 +33,4 @@ jobs:
 
       - name: Python syntax check
         # ubuntu-latest ships python3 - no nix needed
-        run: python3 -m py_compile src/kicad-template.py src/generate-diff-artifacts.py && echo "OK"
+        run: python3 -m py_compile src/kicad-template.py src/kicad_ci/color.py src/kicad_ci/triptych.py src/kicad_ci/pdf.py src/kicad_ci/cli.py && echo "OK"

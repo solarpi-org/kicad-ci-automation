@@ -448,10 +448,19 @@ if [[ "$SKIP_PLOTS" == false ]]; then
       print_info "Exporting PCB PDF for: $KICAD_PCB"
 
       if kicad-cli pcb export pdf \
-        --output "$PCB_PDF" \
+        --output "${PCB_PDF%.pdf}-all.pdf" \
         --layers "F.Cu,B.Cu,F.Silkscreen,B.Silkscreen,Edge.Cuts" \
         --include-border-title \
-        "$KICAD_PCB" 2>&1 | tee "$OUTPUT_DIR/$(outname "$PCB_STEM" pcb-pdf log)"; then
+        --mode-single \
+        "$KICAD_PCB" 2>&1 | tee "$OUTPUT_DIR/$(outname "$PCB_STEM" pcb-pdf log)" \
+      && kicad-cli pcb export pdf \
+        --output "${PCB_PDF%.pdf}-layers.pdf" \
+        --layers "F.Cu,B.Cu,F.Silkscreen,B.Silkscreen,Edge.Cuts" \
+        --include-border-title \
+        --mode-multipage \
+        "$KICAD_PCB" 2>&1 | tee -a "$OUTPUT_DIR/$(outname "$PCB_STEM" pcb-pdf log)" \
+      && pdfunite "${PCB_PDF%.pdf}-all.pdf" "${PCB_PDF%.pdf}-layers.pdf" "$PCB_PDF" \
+      && rm -f "${PCB_PDF%.pdf}-all.pdf" "${PCB_PDF%.pdf}-layers.pdf"; then
         print_success "PCB PDF export completed: $PCB_STEM"
         print_info "Output: $PCB_PDF"
       else

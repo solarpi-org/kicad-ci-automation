@@ -176,7 +176,8 @@ def crop_pdfs_uniform(pdf_files, margin=5, footer_font_size=None):
     if not pdf_files:
         return
 
-    MAX_WIDTH, MAX_HEIGHT = 297, 210
+    # Cap to A4 landscape dimensions (in points: 1pt = 1/72 inch)
+    MAX_WIDTH, MAX_HEIGHT = 842, 595
 
     print("  Analyzing content bounds...")
 

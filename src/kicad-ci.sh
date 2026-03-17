@@ -142,18 +142,16 @@ OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 # Find KiCAD project files
 print_header "Finding KiCAD Project Files"
 
-KICAD_PRO=$(find "$PROJECT_DIR" -maxdepth 2 -name "*.kicad_pro" | head -n 1)
-KICAD_SCH=$(find "$PROJECT_DIR" -maxdepth 2 -name "*.kicad_sch" | head -n 1)
-KICAD_PCB=$(find "$PROJECT_DIR" -maxdepth 2 -name "*.kicad_pcb" | head -n 1)
+mapfile -t KICAD_SCHS < <(find "$PROJECT_DIR" -maxdepth 2 -name "*.kicad_sch" | sort)
+mapfile -t KICAD_PCBS < <(find "$PROJECT_DIR" -maxdepth 2 -name "*.kicad_pcb" | sort)
 
-if [[ -n "$KICAD_PRO" ]]; then
-  print_info "Found project: $KICAD_PRO"
+if [[ ${#KICAD_SCHS[@]} -gt 0 ]]; then
+  print_info "Found ${#KICAD_SCHS[@]} schematic(s):"
+  for f in "${KICAD_SCHS[@]}"; do print_info "  $f"; done
 fi
-if [[ -n "$KICAD_SCH" ]]; then
-  print_info "Found schematic: $KICAD_SCH"
-fi
-if [[ -n "$KICAD_PCB" ]]; then
-  print_info "Found PCB: $KICAD_PCB"
+if [[ ${#KICAD_PCBS[@]} -gt 0 ]]; then
+  print_info "Found ${#KICAD_PCBS[@]} PCB(s):"
+  for f in "${KICAD_PCBS[@]}"; do print_info "  $f"; done
 fi
 
 # Check KiCAD CLI version
@@ -163,6 +161,32 @@ kicad-cli version
 OVERALL_STATUS=0
 TEMPLATE_BRANCH=""
 TEMPLATE_COMMIT_MADE=false
+# Track files modified by template replacement so we can restore them
+TEMPLATE_MODIFIED_FILES=()
+
+cleanup() {
+  # Restore template-modified files to their original content
+  if [[ ${#TEMPLATE_MODIFIED_FILES[@]} -gt 0 ]]; then
+    pushd "$PROJECT_DIR" > /dev/null
+    for f in "${TEMPLATE_MODIFIED_FILES[@]}"; do
+      git checkout HEAD -- "$f" 2>/dev/null || print_warning "Could not restore $f"
+    done
+    popd > /dev/null
+    print_success "Restored template-modified files to original content"
+  fi
+
+  # Delete temporary CI branch if it still exists
+  if [[ -n "$TEMPLATE_BRANCH" ]]; then
+    pushd "$PROJECT_DIR" > /dev/null
+    if git rev-parse --verify "refs/heads/$TEMPLATE_BRANCH" >/dev/null 2>&1; then
+      git branch -D "$TEMPLATE_BRANCH" >/dev/null 2>&1 || print_warning "Could not delete branch $TEMPLATE_BRANCH"
+      print_success "Deleted temporary branch $TEMPLATE_BRANCH"
+    fi
+    popd > /dev/null
+  fi
+}
+
+trap cleanup EXIT
 
 # Run template replacement
 if [[ "$SKIP_TEMPLATE" == false ]]; then
@@ -186,25 +210,29 @@ if [[ "$SKIP_TEMPLATE" == false ]]; then
     fi
   fi
 
-  # Apply templating to PCB
-  if [[ -n "$KICAD_PCB" ]]; then
+  # Apply templating to all PCBs
+  for KICAD_PCB in "${KICAD_PCBS[@]}"; do
+    PCB_STEM=$(basename "${KICAD_PCB%.kicad_pcb}")
     print_info "Processing PCB: $KICAD_PCB"
-    if kicad-template "$KICAD_PCB" "${TEMPLATE_ARGS[@]}" 2>&1 | tee "$OUTPUT_DIR/template-pcb-log.txt"; then
-      print_success "PCB template replacement completed"
+    if kicad-template "$KICAD_PCB" "${TEMPLATE_ARGS[@]}" 2>&1 | tee "$OUTPUT_DIR/template-pcb-${PCB_STEM}-log.txt"; then
+      print_success "PCB template replacement completed: $PCB_STEM"
+      TEMPLATE_MODIFIED_FILES+=("$KICAD_PCB")
     else
-      print_warning "PCB template replacement had issues (see $OUTPUT_DIR/template-pcb-log.txt)"
+      print_warning "PCB template replacement had issues (see $OUTPUT_DIR/template-pcb-${PCB_STEM}-log.txt)"
     fi
-  fi
+  done
 
-  # Apply templating to schematic
-  if [[ -n "$KICAD_SCH" ]]; then
+  # Apply templating to all schematics
+  for KICAD_SCH in "${KICAD_SCHS[@]}"; do
+    SCH_STEM=$(basename "${KICAD_SCH%.kicad_sch}")
     print_info "Processing schematic: $KICAD_SCH"
-    if kicad-template "$KICAD_SCH" "${TEMPLATE_ARGS[@]}" 2>&1 | tee "$OUTPUT_DIR/template-sch-log.txt"; then
-      print_success "Schematic template replacement completed"
+    if kicad-template "$KICAD_SCH" "${TEMPLATE_ARGS[@]}" 2>&1 | tee "$OUTPUT_DIR/template-sch-${SCH_STEM}-log.txt"; then
+      print_success "Schematic template replacement completed: $SCH_STEM"
+      TEMPLATE_MODIFIED_FILES+=("$KICAD_SCH")
     else
-      print_warning "Schematic template replacement had issues (see $OUTPUT_DIR/template-sch-log.txt)"
+      print_warning "Schematic template replacement had issues (see $OUTPUT_DIR/template-sch-${SCH_STEM}-log.txt)"
     fi
-  fi
+  done
 
   # Create a temporary CI branch and commit template changes there.
   # This avoids touching the current branch at all - safe to run locally.
@@ -226,8 +254,9 @@ if [[ "$SKIP_TEMPLATE" == false ]]; then
       git branch "$TEMPLATE_BRANCH" HEAD
 
       # Stage the modified KiCAD files into a temporary index
-      [[ -n "$KICAD_PCB" ]] && git add "$(basename "$KICAD_PCB")" 2>/dev/null || true
-      [[ -n "$KICAD_SCH" ]] && git add "$(basename "$KICAD_SCH")" 2>/dev/null || true
+      for f in "${KICAD_PCBS[@]}" "${KICAD_SCHS[@]}"; do
+        [[ -n "$f" ]] && git add "$f" 2>/dev/null || print_warning "Could not stage $f"
+      done
 
       # Commit onto the new branch without switching (update-ref trick).
       # Set author/committer identity inline so no global git config is needed
@@ -240,8 +269,9 @@ if [[ "$SKIP_TEMPLATE" == false ]]; then
       git update-ref "refs/heads/$TEMPLATE_BRANCH" "$COMMIT"
 
       # Restore the index to match HEAD (unstage the staged files)
-      [[ -n "$KICAD_PCB" ]] && git restore --staged "$(basename "$KICAD_PCB")" 2>/dev/null || true
-      [[ -n "$KICAD_SCH" ]] && git restore --staged "$(basename "$KICAD_SCH")" 2>/dev/null || true
+      for f in "${KICAD_PCBS[@]}" "${KICAD_SCHS[@]}"; do
+        [[ -n "$f" ]] && git restore --staged "$f" 2>/dev/null || print_warning "Could not unstage $f"
+      done
 
       TEMPLATE_COMMIT_MADE=true
       print_success "Template changes committed to $TEMPLATE_BRANCH (current branch unchanged)"
@@ -255,176 +285,179 @@ if [[ "$SKIP_TEMPLATE" == false ]]; then
 fi
 
 # Run ERC (Electrical Rules Check)
-if [[ "$SKIP_ERC" == false ]] && [[ -n "$KICAD_SCH" ]]; then
+if [[ "$SKIP_ERC" == false ]] && [[ ${#KICAD_SCHS[@]} -gt 0 ]]; then
   print_header "Running Electrical Rules Check (ERC)"
-  ERC_OUTPUT="$OUTPUT_DIR/erc-report.json"
 
-  if kicad-cli sch erc \
-    --format json \
-    --output "$ERC_OUTPUT" \
-    --exit-code-violations \
-    "$KICAD_SCH" 2>&1 | tee "$OUTPUT_DIR/erc-log.txt"; then
-    print_success "ERC passed with no violations"
-  else
-    ERC_EXIT_CODE=$?
-    print_error "ERC failed with exit code $ERC_EXIT_CODE"
-    OVERALL_STATUS=1
+  for KICAD_SCH in "${KICAD_SCHS[@]}"; do
+    SCH_STEM=$(basename "${KICAD_SCH%.kicad_sch}")
+    ERC_OUTPUT="$OUTPUT_DIR/erc-${SCH_STEM}-report.json"
+    print_info "Running ERC on: $KICAD_SCH"
 
-    # Parse and display violations if JSON report exists
-    if [[ -f "$ERC_OUTPUT" ]]; then
-      VIOLATION_COUNT=$(jq '.sheets[].violations | length' "$ERC_OUTPUT" 2>/dev/null | awk '{s+=$1} END {print s}')
-      if [[ -n "$VIOLATION_COUNT" ]] && [[ "$VIOLATION_COUNT" -gt 0 ]]; then
-        print_warning "Found $VIOLATION_COUNT ERC violation(s)"
-        print_info "See detailed report: $ERC_OUTPUT"
+    if kicad-cli sch erc \
+      --format json \
+      --output "$ERC_OUTPUT" \
+      --exit-code-violations \
+      "$KICAD_SCH" 2>&1 | tee "$OUTPUT_DIR/erc-${SCH_STEM}-log.txt"; then
+      print_success "ERC passed: $SCH_STEM"
+    else
+      ERC_EXIT_CODE=$?
+      print_error "ERC failed for $SCH_STEM (exit code $ERC_EXIT_CODE)"
+      OVERALL_STATUS=1
+
+      if [[ -f "$ERC_OUTPUT" ]]; then
+        VIOLATION_COUNT=$(jq '.sheets[].violations | length' "$ERC_OUTPUT" 2>/dev/null | awk '{s+=$1} END {print s}')
+        if [[ -n "$VIOLATION_COUNT" ]] && [[ "$VIOLATION_COUNT" -gt 0 ]]; then
+          print_warning "Found $VIOLATION_COUNT ERC violation(s) in $SCH_STEM"
+          print_info "See detailed report: $ERC_OUTPUT"
+        fi
+      fi
+
+      if [[ "$EXIT_ON_ERROR" == true ]]; then
+        exit 1
       fi
     fi
-
-    if [[ "$EXIT_ON_ERROR" == true ]]; then
-      exit 1
-    fi
-  fi
+  done
 elif [[ "$SKIP_ERC" == false ]]; then
-  print_warning "Skipping ERC: No schematic file found"
+  print_warning "Skipping ERC: No schematic files found"
 fi
 
 # Run DRC (Design Rules Check)
-if [[ "$SKIP_DRC" == false ]] && [[ -n "$KICAD_PCB" ]]; then
+if [[ "$SKIP_DRC" == false ]] && [[ ${#KICAD_PCBS[@]} -gt 0 ]]; then
   print_header "Running Design Rules Check (DRC)"
-  DRC_OUTPUT="$OUTPUT_DIR/drc-report.json"
 
-  if kicad-cli pcb drc \
-    --format json \
-    --output "$DRC_OUTPUT" \
-    --exit-code-violations \
-    "$KICAD_PCB" 2>&1 | tee "$OUTPUT_DIR/drc-log.txt"; then
-    print_success "DRC passed with no violations"
-  else
-    DRC_EXIT_CODE=$?
-    print_error "DRC failed with exit code $DRC_EXIT_CODE"
-    OVERALL_STATUS=1
+  for KICAD_PCB in "${KICAD_PCBS[@]}"; do
+    PCB_STEM=$(basename "${KICAD_PCB%.kicad_pcb}")
+    DRC_OUTPUT="$OUTPUT_DIR/drc-${PCB_STEM}-report.json"
+    print_info "Running DRC on: $KICAD_PCB"
 
-    # Parse and display violations if JSON report exists
-    if [[ -f "$DRC_OUTPUT" ]]; then
-      VIOLATION_COUNT=$(jq '[.violations, .unconnected_items, .schematic_parity] | map(length) | add' "$DRC_OUTPUT" 2>/dev/null)
-      if [[ -n "$VIOLATION_COUNT" ]] && [[ "$VIOLATION_COUNT" -gt 0 ]]; then
-        print_warning "Found $VIOLATION_COUNT DRC violation(s)"
-        print_info "See detailed report: $DRC_OUTPUT"
+    if kicad-cli pcb drc \
+      --format json \
+      --output "$DRC_OUTPUT" \
+      --exit-code-violations \
+      "$KICAD_PCB" 2>&1 | tee "$OUTPUT_DIR/drc-${PCB_STEM}-log.txt"; then
+      print_success "DRC passed: $PCB_STEM"
+    else
+      DRC_EXIT_CODE=$?
+      print_error "DRC failed for $PCB_STEM (exit code $DRC_EXIT_CODE)"
+      OVERALL_STATUS=1
+
+      if [[ -f "$DRC_OUTPUT" ]]; then
+        VIOLATION_COUNT=$(jq '[.violations, .unconnected_items, .schematic_parity] | map(length) | add' "$DRC_OUTPUT" 2>/dev/null)
+        if [[ -n "$VIOLATION_COUNT" ]] && [[ "$VIOLATION_COUNT" -gt 0 ]]; then
+          print_warning "Found $VIOLATION_COUNT DRC violation(s) in $PCB_STEM"
+          print_info "See detailed report: $DRC_OUTPUT"
+        fi
+      fi
+
+      if [[ "$EXIT_ON_ERROR" == true ]]; then
+        exit 1
       fi
     fi
-
-    if [[ "$EXIT_ON_ERROR" == true ]]; then
-      exit 1
-    fi
-  fi
+  done
 elif [[ "$SKIP_DRC" == false ]]; then
-  print_warning "Skipping DRC: No PCB file found"
+  print_warning "Skipping DRC: No PCB files found"
 fi
 
 # Export ODB++
-if [[ "$SKIP_ODB" == false ]] && [[ -n "$KICAD_PCB" ]]; then
+if [[ "$SKIP_ODB" == false ]] && [[ ${#KICAD_PCBS[@]} -gt 0 ]]; then
   print_header "Exporting ODB++"
-  ODB_OUTPUT="$OUTPUT_DIR/odb.zip"
 
-  if kicad-cli pcb export odb \
-    --output "$ODB_OUTPUT" \
-    "$KICAD_PCB" 2>&1 | tee "$OUTPUT_DIR/odb-log.txt"; then
-    print_success "ODB++ export completed successfully"
-    print_info "Output: $ODB_OUTPUT"
-  else
-    print_error "ODB++ export failed"
-    OVERALL_STATUS=1
+  for KICAD_PCB in "${KICAD_PCBS[@]}"; do
+    PCB_STEM=$(basename "${KICAD_PCB%.kicad_pcb}")
+    ODB_OUTPUT="$OUTPUT_DIR/odb-${PCB_STEM}.zip"
+    print_info "Exporting ODB++ for: $KICAD_PCB"
 
-    if [[ "$EXIT_ON_ERROR" == true ]]; then
-      exit 1
+    if kicad-cli pcb export odb \
+      --output "$ODB_OUTPUT" \
+      "$KICAD_PCB" 2>&1 | tee "$OUTPUT_DIR/odb-${PCB_STEM}-log.txt"; then
+      print_success "ODB++ export completed: $PCB_STEM"
+      print_info "Output: $ODB_OUTPUT"
+    else
+      print_error "ODB++ export failed for $PCB_STEM"
+      OVERALL_STATUS=1
+
+      if [[ "$EXIT_ON_ERROR" == true ]]; then
+        exit 1
+      fi
     fi
-  fi
+  done
 elif [[ "$SKIP_ODB" == false ]]; then
-  print_warning "Skipping ODB++ export: No PCB file found"
+  print_warning "Skipping ODB++ export: No PCB files found"
 fi
 
 # Run kicad-diff
-if [[ "$SKIP_DIFF" == false ]] && [[ -n "$KICAD_PCB" ]] && [[ -n "$COMPARE_REF" ]]; then
-  print_header "Generating Visual Diff"
-
-  DIFF_OUTPUT="$OUTPUT_DIR/diff"
-  mkdir -p "$DIFF_OUTPUT"
-
-  # Run kidiff from project directory
-  pushd "$PROJECT_DIR" > /dev/null
-
-  # Run kidiff and capture output
-  DIFF_LOG="$OUTPUT_DIR/diff-log.txt"
-  DIFF_SUCCESS=false
+if [[ "$SKIP_DIFF" == false ]] && [[ ${#KICAD_PCBS[@]} -gt 0 ]] && [[ -n "$COMPARE_REF" ]]; then
+  print_header "Generating Visual Diffs"
 
   # If we made a CI branch with template substitutions applied, diff against
   # that branch's tip so kidiff sees the rendered values. Otherwise use HEAD.
   DIFF_NEW_REF="${TEMPLATE_BRANCH:-HEAD}"
 
-  if kidiff \
-    -o "$DIFF_OUTPUT" \
-    -a "$DIFF_NEW_REF" \
-    -b "$COMPARE_REF" \
-    --webserver-disable \
-    "$(basename "$KICAD_PCB")" 2>&1 | tee "$DIFF_LOG"; then
-    print_success "Visual diff generated successfully"
-    print_info "Output: $DIFF_OUTPUT"
-    DIFF_SUCCESS=true
-  else
-    DIFF_EXIT_CODE=$?
-    # Check if the failure was due to no differences (which is not really an error)
-    if grep -q "There is no difference" "$DIFF_LOG" 2>/dev/null; then
-      print_warning "No changes detected in PCB between $COMPARE_REF and HEAD"
-      print_info "Skipping visual diff generation"
-    else
-      print_error "Visual diff generation failed with exit code $DIFF_EXIT_CODE"
-      OVERALL_STATUS=1
+  for KICAD_PCB in "${KICAD_PCBS[@]}"; do
+    PCB_STEM=$(basename "${KICAD_PCB%.kicad_pcb}")
+    DIFF_OUTPUT="$OUTPUT_DIR/diff-${PCB_STEM}"
+    mkdir -p "$DIFF_OUTPUT"
 
-      if [[ "$EXIT_ON_ERROR" == true ]]; then
-        popd > /dev/null
-        exit 1
+    print_info "Generating diff for: $PCB_STEM"
+
+    # Run kidiff from project directory
+    pushd "$PROJECT_DIR" > /dev/null
+
+    DIFF_LOG="$OUTPUT_DIR/diff-${PCB_STEM}-log.txt"
+    DIFF_SUCCESS=false
+
+    if kidiff \
+      -o "$DIFF_OUTPUT" \
+      -a "$DIFF_NEW_REF" \
+      -b "$COMPARE_REF" \
+      --webserver-disable \
+      "$(basename "$KICAD_PCB")" 2>&1 | tee "$DIFF_LOG"; then
+      print_success "Visual diff generated: $PCB_STEM"
+      print_info "Output: $DIFF_OUTPUT"
+      DIFF_SUCCESS=true
+    else
+      DIFF_EXIT_CODE=$?
+      if grep -q "There is no difference" "$DIFF_LOG" 2>/dev/null; then
+        print_warning "No changes detected in $PCB_STEM between $COMPARE_REF and $DIFF_NEW_REF"
+      else
+        print_error "Visual diff generation failed for $PCB_STEM (exit code $DIFF_EXIT_CODE)"
+        OVERALL_STATUS=1
+
+        if [[ "$EXIT_ON_ERROR" == true ]]; then
+          popd > /dev/null
+          exit 1
+        fi
       fi
     fi
-  fi
 
-  popd > /dev/null
+    popd > /dev/null
 
-  # Generate PDF artifacts if diff was successful
-  if [[ "$DIFF_SUCCESS" == true ]]; then
-    print_header "Generating PDF Artifacts"
-    ARTIFACTS_OUTPUT="$OUTPUT_DIR/artifacts"
+    # Generate PDF artifacts if diff was successful
+    if [[ "$DIFF_SUCCESS" == true ]]; then
+      print_header "Generating PDF Artifacts for $PCB_STEM"
+      ARTIFACTS_OUTPUT="$OUTPUT_DIR/artifacts-${PCB_STEM}"
 
-    if generate-diff-artifacts "$DIFF_OUTPUT" -o "$ARTIFACTS_OUTPUT" 2>&1 | tee "$OUTPUT_DIR/artifacts-log.txt"; then
-      print_success "PDF artifacts generated successfully"
-      print_info "Triptych SVGs: $ARTIFACTS_OUTPUT/triptych-svgs/"
+      if generate-diff-artifacts "$DIFF_OUTPUT" -o "$ARTIFACTS_OUTPUT" 2>&1 | tee "$OUTPUT_DIR/artifacts-${PCB_STEM}-log.txt"; then
+        print_success "PDF artifacts generated: $PCB_STEM"
+        print_info "Triptych SVGs: $ARTIFACTS_OUTPUT/triptych-svgs/"
 
-      if [[ -f "$ARTIFACTS_OUTPUT/pcb-diff.pdf" ]]; then
-        print_info "PCB PDF: $ARTIFACTS_OUTPUT/pcb-diff.pdf"
+        if [[ -f "$ARTIFACTS_OUTPUT/pcb-diff.pdf" ]]; then
+          print_info "PCB PDF: $ARTIFACTS_OUTPUT/pcb-diff.pdf"
+        fi
+
+        if [[ -f "$ARTIFACTS_OUTPUT/schematic-diff.pdf" ]]; then
+          print_info "Schematic PDF: $ARTIFACTS_OUTPUT/schematic-diff.pdf"
+        fi
+      else
+        print_warning "PDF artifact generation had issues for $PCB_STEM (check $OUTPUT_DIR/artifacts-${PCB_STEM}-log.txt)"
+        print_info "Triptych SVGs may still be available in: $ARTIFACTS_OUTPUT/triptych-svgs/"
       fi
-
-      if [[ -f "$ARTIFACTS_OUTPUT/schematic-diff.pdf" ]]; then
-        print_info "Schematic PDF: $ARTIFACTS_OUTPUT/schematic-diff.pdf"
-      fi
-    else
-      print_warning "PDF artifact generation had some issues (check $OUTPUT_DIR/artifacts-log.txt)"
-      print_info "Triptych SVGs may still be available in: $ARTIFACTS_OUTPUT/triptych-svgs/"
     fi
-  fi
+  done
 elif [[ "$SKIP_DIFF" == false ]] && [[ -z "$COMPARE_REF" ]]; then
   print_warning "Skipping visual diff: No comparison reference specified (use -c/--compare)"
 elif [[ "$SKIP_DIFF" == false ]]; then
-  print_warning "Skipping visual diff: No PCB file found"
-fi
-
-# Clean up temporary CI branch if one was created
-if [[ "$TEMPLATE_COMMIT_MADE" == true ]] && [[ -n "$TEMPLATE_BRANCH" ]]; then
-  print_header "Cleaning Up CI Branch"
-  pushd "$PROJECT_DIR" > /dev/null
-  if git branch -D "$TEMPLATE_BRANCH" 2>&1 | tee "$OUTPUT_DIR/template-cleanup-log.txt"; then
-    print_success "Temporary branch $TEMPLATE_BRANCH deleted"
-  else
-    print_warning "Could not delete branch $TEMPLATE_BRANCH - remove it manually with: git branch -D $TEMPLATE_BRANCH"
-  fi
-  popd > /dev/null
+  print_warning "Skipping visual diff: No PCB files found"
 fi
 
 # Summary

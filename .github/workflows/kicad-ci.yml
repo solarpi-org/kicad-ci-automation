@@ -66,12 +66,10 @@ jobs:
         id: find
         working-directory: ${{ inputs.project-path }}
         run: |
-          SCH=$(find . -maxdepth 2 -name "*.kicad_sch" | head -1)
-          PCB=$(find . -maxdepth 2 -name "*.kicad_pcb" | head -1)
-          echo "has-schematic=$([ -n "$SCH" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "has-pcb=$([ -n "$PCB" ] && echo true || echo false)"       >> "$GITHUB_OUTPUT"
-          echo "schematic=$SCH" >> "$GITHUB_OUTPUT"
-          echo "pcb=$PCB"       >> "$GITHUB_OUTPUT"
+          SCHS=$(find . -maxdepth 2 -name "*.kicad_sch" | sort)
+          PCBS=$(find . -maxdepth 2 -name "*.kicad_pcb" | sort)
+          echo "has-schematic=$([ -n "$SCHS" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "has-pcb=$([ -n "$PCBS" ] && echo true || echo false)"       >> "$GITHUB_OUTPUT"
 
       - name: Detect defines file
         id: defines
@@ -97,24 +95,24 @@ jobs:
       - name: Parse ERC results
         id: erc
         run: |
-          REPORT="ci-output/erc-report.json"
-          if [ -f "$REPORT" ]; then
-            COUNT=$(jq '[.sheets[].violations | length] | add // 0' "$REPORT")
-          else
-            COUNT=0
-          fi
+          COUNT=0
+          for REPORT in ci-output/erc-*-report.json; do
+            [ -f "$REPORT" ] || continue
+            N=$(jq '[.sheets[].violations | length] | add // 0' "$REPORT")
+            COUNT=$((COUNT + N))
+          done
           echo "violations=$COUNT" >> "$GITHUB_OUTPUT"
           echo "ERC violations: $COUNT"
 
       - name: Parse DRC results
         id: drc
         run: |
-          REPORT="ci-output/drc-report.json"
-          if [ -f "$REPORT" ]; then
-            COUNT=$(jq '[.violations, .unconnected_items, .schematic_parity] | map(length) | add // 0' "$REPORT")
-          else
-            COUNT=0
-          fi
+          COUNT=0
+          for REPORT in ci-output/drc-*-report.json; do
+            [ -f "$REPORT" ] || continue
+            N=$(jq '[.violations, .unconnected_items, .schematic_parity] | map(length) | add // 0' "$REPORT")
+            COUNT=$((COUNT + N))
+          done
           echo "violations=$COUNT" >> "$GITHUB_OUTPUT"
           echo "DRC violations: $COUNT"
 
@@ -124,10 +122,10 @@ jobs:
         with:
           name: erc-drc-reports
           path: |
-            ci-output/erc-report.json
-            ci-output/drc-report.json
-            ci-output/erc-log.txt
-            ci-output/drc-log.txt
+            ci-output/erc-*-report.json
+            ci-output/drc-*-report.json
+            ci-output/erc-*-log.txt
+            ci-output/drc-*-log.txt
           retention-days: 30
 
       - name: Upload ODB++
@@ -136,7 +134,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: odb-plus-plus
-          path: ci-output/odb.zip
+          path: ci-output/odb-*.zip
           retention-days: 90
 
       - name: Post PR comment
@@ -248,12 +246,12 @@ jobs:
             || true
 
           # Surface whether artifacts were produced
-          if [ -f ci-output/artifacts/pcb-diff.pdf ]; then
+          if compgen -G "ci-output/artifacts-*/pcb-diff.pdf" > /dev/null; then
             echo "has-pcb-diff=true"  >> "$GITHUB_OUTPUT"
           else
             echo "has-pcb-diff=false" >> "$GITHUB_OUTPUT"
           fi
-          if [ -f ci-output/artifacts/schematic-diff.pdf ]; then
+          if compgen -G "ci-output/artifacts-*/schematic-diff.pdf" > /dev/null; then
             echo "has-sch-diff=true"  >> "$GITHUB_OUTPUT"
           else
             echo "has-sch-diff=false" >> "$GITHUB_OUTPUT"
@@ -265,9 +263,9 @@ jobs:
         with:
           name: visual-diff
           path: |
-            ci-output/artifacts/pcb-diff.pdf
-            ci-output/artifacts/schematic-diff.pdf
-            ci-output/artifacts/triptych-svgs/
+            ci-output/artifacts-*/pcb-diff.pdf
+            ci-output/artifacts-*/schematic-diff.pdf
+            ci-output/artifacts-*/triptych-svgs/
           retention-days: 30
 
       - name: Post diff comment
@@ -362,4 +360,4 @@ jobs:
       - name: Upload ODB++ to release
         uses: softprops/action-gh-release@v2
         with:
-          files: ci-output/odb.zip
+          files: ci-output/odb-*.zip

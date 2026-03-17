@@ -138,6 +138,14 @@ def create_triptych_svg(old_svg_path, new_svg_path, output_svg_path, title=""):
     print(f"  Created: {output_svg_path}")
 
 
+def _is_commit_dir(name):
+    """Check if a directory name looks like a git commit hash or HEAD."""
+    if name == 'HEAD':
+        return True
+    # Full or abbreviated hex SHA
+    return len(name) >= 7 and all(c in '0123456789abcdef' for c in name)
+
+
 def find_svg_pairs(diff_output_dir):
     """Find matching old/new SVG pairs in a kidiff output directory.
 
@@ -148,7 +156,7 @@ def find_svg_pairs(diff_output_dir):
         Dict with 'pcb' and 'sch' keys, each a list of (old, new, name) tuples
     """
     subdirs = [d for d in Path(diff_output_dir).iterdir()
-               if d.is_dir() and not d.name.startswith('.')]
+               if d.is_dir() and _is_commit_dir(d.name)]
 
     if len(subdirs) < 2:
         print(f"Error: Expected 2 commit directories in {diff_output_dir}, found {len(subdirs)}")

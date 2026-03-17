@@ -406,6 +406,10 @@ jobs:
             ${{ env.COMPARE_ARG }} \
             ${{ env.DEFINES_ARG }}
 
+      - name: Generate SBOM
+        run: |
+          nix run "github:solarpi-org/kicad-ci-automation/${{ inputs.kicad-ci-ref }}#generate-sbom" -- ci-output
+
       - name: Upload all artifacts to release
         uses: softprops/action-gh-release@v2
         with:
@@ -415,3 +419,5 @@ jobs:
             ci-output/*-drc-report.json
             ci-output/*-pcb-diff.pdf
             ci-output/*-schematic-diff.pdf
+            ci-output/sbom.cdx.json
+            ci-output/sbom.spdx.json

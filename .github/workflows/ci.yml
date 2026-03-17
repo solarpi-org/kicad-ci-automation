@@ -9,6 +9,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  release:
+    types: [published]
 
 jobs:
   lint:
@@ -40,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: write
-      contents: read
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +76,7 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: nix run .#generate-sbom
 
-      - name: Upload SBOM
+      - name: Upload SBOM artifact
         uses: actions/upload-artifact@v4
         with:
           name: sbom
@@ -83,3 +85,9 @@ jobs:
             sbom.spdx.json
             sbom.csv
           retention-days: 90
+
+      - name: Attach SBOM to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" sbom.cdx.json sbom.spdx.json

@@ -341,14 +341,30 @@ jobs:
             const hasSchDiff = '${{ steps.diff.outputs.has-sch-diff }}' === 'true';
             const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
+            // Look up the visual-diff artifact for a direct download link
+            let artifactUrl = runUrl;
+            try {
+              const { data: { artifacts } } = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                run_id: context.runId,
+              });
+              const diffArtifact = artifacts.find(a => a.name === 'visual-diff');
+              if (diffArtifact) {
+                artifactUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}/artifacts/${diffArtifact.id}`;
+              }
+            } catch (e) {
+              console.log(`Could not look up artifact URL, falling back to run URL: ${e.message}`);
+            }
+
             let body = `## 🔍 KiCAD CI — Visual Diff\n\n`;
 
             if (!hasPcbDiff && !hasSchDiff) {
               body += `No visual changes detected between this PR and \`${{ github.base_ref }}\`.\n`;
             } else {
               body += `Changes detected vs \`${{ github.base_ref }}\`:\n\n`;
-              if (hasPcbDiff) body += `- 📐 **PCB diff** — [pcb-diff.pdf](${runUrl})\n`;
-              if (hasSchDiff) body += `- 📋 **Schematic diff** — [schematic-diff.pdf](${runUrl})\n`;
+              if (hasPcbDiff) body += `- 📐 **PCB diff** — [pcb-diff.pdf](${artifactUrl})\n`;
+              if (hasSchDiff) body += `- 📋 **Schematic diff** — [schematic-diff.pdf](${artifactUrl})\n`;
               body += `\n> Triptych: **purple** = removed, **green** = added\n`;
             }
 

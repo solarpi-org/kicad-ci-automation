@@ -1,5 +1,9 @@
 # KiCAD CI/CD Automation
 
+[![CI](https://github.com/solarpi-org/kicad-ci-automation/actions/workflows/ci.yml/badge.svg)](https://github.com/solarpi-org/kicad-ci-automation/actions/workflows/ci.yml)
+[![SBOM](https://img.shields.io/badge/SBOM-CycloneDX%20%7C%20SPDX-blue)](https://github.com/solarpi-org/kicad-ci-automation/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Automated CI/CD pipeline for KiCAD projects with ERC, DRC, ODB++ export, visual diffs, and SBOM generation.
 
 ## Features

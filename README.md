@@ -1,224 +1,176 @@
 # KiCAD CI/CD Automation
 
-Automated CI/CD pipeline for KiCAD projects with ERC, DRC, ODB++ export, and visual diff generation.
+Automated CI/CD pipeline for KiCAD projects with ERC, DRC, ODB++ export, visual diffs, and SBOM generation.
 
 ## Features
 
 - **Electrical Rules Check (ERC)**: Validates schematic electrical connections
 - **Design Rules Check (DRC)**: Validates PCB layout against design rules
 - **ODB++ Export**: Generates industry-standard manufacturing files
-- **Visual Diff**: Creates visual comparisons between PCB versions using kicad-diff
-- **PDF Artifacts**: Automatically generates triptych SVGs and combined PDFs showing layer-by-layer differences
+- **Visual Diff**: Creates triptych overlays comparing PCB/schematic versions (purple = removed, green = added)
+- **Template Replacement**: Substitutes KiCAD text variables from a defines file before running checks
+- **SBOM Generation**: Produces CycloneDX and SPDX software bills of materials via [sbomnix](https://github.com/tiiuae/sbomnix)
 
 ## Quick Start
 
-### Using Nix Flakes
+### As a Reusable GitHub Actions Workflow
 
-Run the CI pipeline directly:
+This is the intended usage — add to your KiCAD project repo:
 
-```bash
-nix run .
+```yaml
+# .github/workflows/kicad-ci.yml
+name: KiCAD CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+
+jobs:
+  kicad-ci:
+    uses: solarpi-org/kicad-ci-automation/.github/workflows/kicad-ci.yml@main
+    with:
+      project-path: .
+      enable-diff: true
+      # defines-file: defines.json   # uncomment if using template replacement
+    secrets: inherit
+    permissions:
+      contents: write
+      pull-requests: write
 ```
 
-Run with options:
+This gives you:
+- **Push/PR**: ERC + DRC + ODB++ export, with PR comments summarizing violations
+- **PR**: Visual diff against the base branch (triptych PDFs)
+- **Release**: All of the above + SBOM attached as release artifacts
+
+### Running Locally
 
 ```bash
-nix run . -- --help
-nix run . -- -p ./my-project -c HEAD~1
+# Run full pipeline
+nix run github:solarpi-org/kicad-ci-automation -- --help
+
+# Run on a specific project
+nix run github:solarpi-org/kicad-ci-automation -- -p ./my-board -c main
+
+# Generate SBOM only
+nix run github:solarpi-org/kicad-ci-automation#generate-sbom
 ```
 
 ### Development Shell
 
-Enter a development shell with all tools available:
-
 ```bash
-nix develop
+nix develop github:solarpi-org/kicad-ci-automation
 kicad-ci --help
 ```
 
 ## Usage
 
-```bash
+```
 kicad-ci [OPTIONS]
 ```
 
 ### Options
 
-- `-p, --project DIR`: Project directory (default: current directory)
-- `-o, --output DIR`: Output directory (default: ./ci-output)
-- `-c, --compare REF`: Git reference to compare against (for kicad-diff)
-- `--skip-erc`: Skip Electrical Rules Check
-- `--skip-drc`: Skip Design Rules Check
-- `--skip-odb`: Skip ODB++ export
-- `--skip-diff`: Skip visual diff generation
-- `--exit-on-error`: Exit immediately on first error (default: continue all checks)
-- `-h, --help`: Show help message
+| Option | Description |
+|--------|-------------|
+| `-p, --project DIR` | Project directory (default: current directory) |
+| `-o, --output DIR` | Output directory (default: `./ci-output`) |
+| `-c, --compare REF` | Git reference to compare against for visual diff |
+| `-d, --defines FILE` | Template definitions file (JSON, YAML, or KEY=VALUE) |
+| `-n, --prefix PREFIX` | Prefix for output filenames (e.g. `pr-42-abc1234`) |
+| `--skip-erc` | Skip Electrical Rules Check |
+| `--skip-drc` | Skip Design Rules Check |
+| `--skip-odb` | Skip ODB++ export |
+| `--skip-diff` | Skip visual diff generation |
+| `--skip-template` | Skip template placeholder replacement |
+| `--exit-on-error` | Exit immediately on first error (default: continue all checks) |
+| `-h, --help` | Show help message |
 
 ### Examples
 
-#### Run all checks on current directory
-
 ```bash
+# Run all checks on current directory
 kicad-ci
-```
 
-#### Run checks on specific project with Git comparison
-
-```bash
+# Run checks with comparison against main branch
 kicad-ci -p ./my-board -c main
-```
 
-#### Run only ERC and DRC
-
-```bash
+# Run only ERC and DRC
 kicad-ci --skip-odb --skip-diff
-```
 
-#### Run with custom output directory
+# Run with template replacement
+kicad-ci -d defines.json
 
-```bash
-kicad-ci -o ./build/ci-reports
+# Run with prefixed output filenames
+kicad-ci -n "v1.0-abc1234" -o ./build
 ```
 
 ## Output Structure
 
-After running, the output directory will contain:
+Output files are named `[prefix-]boardname-suffix.ext`:
 
 ```
 ci-output/
-├── erc-report.json       # ERC violations in JSON format
-├── erc-log.txt           # ERC execution log
-├── drc-report.json       # DRC violations in JSON format
-├── drc-log.txt           # DRC execution log
-├── odb.zip               # ODB++ manufacturing files
-├── odb-log.txt           # ODB++ export log
-├── diff/                 # Visual diff raw output (if --compare used)
-│   ├── <commit-hash-old>/
-│   │   ├── pcb/          # Old version PCB layer SVGs
-│   │   └── sch/          # Old version schematic SVGs
-│   ├── <commit-hash-new>/
-│   │   ├── pcb/          # New version PCB layer SVGs
-│   │   └── sch/          # New version schematic SVGs
-│   └── web/              # Interactive HTML viewer
-├── diff-log.txt          # Visual diff execution log
-└── artifacts/            # Generated PDF artifacts (if --compare used)
-    ├── pcb-diff.pdf      # Combined PCB layer differences
-    ├── schematic-diff.pdf # Combined schematic differences
-    ├── artifacts-log.txt  # Artifact generation log
-    ├── triptych-svgs/     # Individual triptych SVGs
-    │   ├── pcb-*.svg      # PCB layer triptychs (old+new+overlay)
-    │   └── sch-*.svg      # Schematic triptychs (old+new+overlay)
-    └── pdfs/              # Individual layer PDFs
-        └── ...
+├── [prefix-]boardname-erc-report.json    # ERC violations
+├── [prefix-]boardname-erc.log            # ERC execution log
+├── [prefix-]boardname-drc-report.json    # DRC violations
+├── [prefix-]boardname-drc.log            # DRC execution log
+├── [prefix-]boardname-odb.zip            # ODB++ manufacturing files
+├── [prefix-]boardname-odb.log            # ODB++ export log
+├── [prefix-]boardname-diff.log           # Visual diff log
+├── [prefix-]boardname-pcb-diff.pdf       # Combined PCB layer differences
+├── [prefix-]boardname-schematic-diff.pdf # Combined schematic differences
+└── artifacts-boardname/                  # Intermediate diff artifacts
+    ├── triptych-svgs/                    # Individual layer triptych SVGs
+    │   ├── pcb-*.svg
+    │   └── sch-*.svg
+    └── pdfs/                             # Individual layer PDFs
 ```
 
-### Triptych Method
+## Visual Diff — Triptych Method
 
-The visual diff uses the "triptych" method to show differences:
-- **Green/Cyan tint**: Elements from the old version (green and blue channels boosted)
-- **Red/Pink tint**: Elements from the new version (red channel boosted, 50% opacity)
-- **Yellow/White**: Areas where versions are identical (colors blend)
-- **Pure Green**: Elements that were removed (only in old version)
-- **Pure Red**: Elements that were added (only in new version)
+The visual diff overlays old and new versions with color tinting:
 
-Each triptych SVG embeds the complete vector content from both versions with aggressive color tinting applied directly to fill and stroke attributes (not via rasterizing SVG filters). The new version has group-level opacity (`opacity="0.5"` on the group element) to create the overlay effect without compounding transparency on overlapping elements. This approach ensures all vector data is preserved and properly rendered when converting to PDF via Inkscape, which has excellent support for group opacity. The generated PDFs maintain full vector quality - they can be zoomed infinitely without pixelation, making them perfect for documentation, manufacturing reviews, and design comparisons.
+- **Purple**: Old/removed content (complementary tint, full opacity)
+- **Green**: New/added content (green tint, 50% group opacity)
+- **Blended**: Areas where both versions overlap
 
-## CI/CD Integration
+All output is fully vector — PDFs can be zoomed infinitely without pixelation.
 
-### GitHub Actions
+## SBOM Generation
 
-```yaml
-name: KiCAD CI
+Generate a Software Bill of Materials for the kicad-ci runtime closure:
 
-on: [push, pull_request]
+```bash
+# Generate in current directory
+nix run .#generate-sbom
 
-jobs:
-  kicad-checks:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Needed for git history comparison
-
-      - uses: cachix/install-nix-action@v24
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-
-      - name: Run KiCAD CI
-        run: |
-          nix run github:yourusername/kicad-ci-automation -- \
-            -p . \
-            -c ${{ github.event.pull_request.base.sha || 'HEAD~1' }} \
-            -o ./ci-output
-
-      - name: Upload CI Reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: kicad-ci-reports
-          path: ci-output/
+# Generate in a specific directory
+nix run .#generate-sbom -- ./my-sbom-dir
 ```
 
-### GitLab CI
+Produces CycloneDX (`.cdx.json`), SPDX (`.spdx.json`), and CSV formats. The SBOM is cached based on the Nix store hash — regeneration is skipped when the closure hasn't changed.
 
-```yaml
-kicad-ci:
-  image: nixos/nix:latest
-  before_script:
-    - nix-channel --update
-    - nix-env -iA nixpkgs.git
-  script:
-    - nix --extra-experimental-features "nix-command flakes" run . -- -c HEAD~1
-  artifacts:
-    when: always
-    paths:
-      - ci-output/
-    reports:
-      junit: ci-output/*-report.json
-```
+On releases, SBOMs are automatically attached as GitHub release artifacts.
+
+## Reusable Workflow Inputs
+
+| Input | Type | Default | Description |
+|-------|------|---------|-------------|
+| `project-path` | string | `.` | Path to KiCAD project within the repo |
+| `enable-diff` | boolean | `true` | Run visual diff on pull requests |
+| `defines-file` | string | `""` | Template defines file path (auto-detected if empty) |
+| `kicad-ci-ref` | string | `main` | Git ref of kicad-ci-automation to use |
 
 ## Requirements
 
 - Nix with flakes enabled
-- KiCAD project files (*.kicad_pro, *.kicad_sch, *.kicad_pcb)
-- Git repository (optional, for visual diff)
-
-## Dependencies
-
-This flake integrates:
-
-- **KiCAD**: PCB design software with CLI tools
-- **kicad-diff**: Visual diff tool for PCB layouts (local flake)
-- **jq**: JSON processing for report parsing
-
-## Troubleshooting
-
-### "No schematic/PCB file found"
-
-Ensure your project directory contains:
-- `*.kicad_sch` for ERC checks
-- `*.kicad_pcb` for DRC checks and ODB++ export
-
-### Visual diff not generating
-
-The visual diff requires:
-1. A PCB file (`*.kicad_pcb`)
-2. A Git repository with history
-3. A comparison reference specified with `-c/--compare`
-
-Example:
-```bash
-kicad-ci -c HEAD~1  # Compare with previous commit
-kicad-ci -c main    # Compare with main branch
-```
-
-### Exit codes
-
-- `0`: All checks passed
-- `1`: One or more checks failed
-
-By default, the script continues running all checks even if one fails. Use `--exit-on-error` to stop at the first failure.
+- KiCAD project files (`*.kicad_sch`, `*.kicad_pcb`)
+- Git repository (for visual diff and template replacement)
 
 ## License
 
@@ -226,4 +178,5 @@ This project is licensed under the **MIT License** — see [LICENSE](LICENSE) fo
 
 ### Dependencies
 
-- [KiCad-Diff](https://github.com/Gasman2014/KiCad-Diff) (MIT) — Visual diff tool for KiCad PCBs. This project uses a [Nix-packaged fork](https://github.com/murdoa/KiCad-Diff).
+- [KiCad-Diff](https://github.com/Gasman2014/KiCad-Diff) (MIT) — Visual diff tool for KiCad PCBs. Uses a [Nix-packaged fork](https://github.com/murdoa/KiCad-Diff).
+- [sbomnix](https://github.com/tiiuae/sbomnix) (Apache-2.0) — SBOM generation for Nix packages.

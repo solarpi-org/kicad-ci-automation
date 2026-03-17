@@ -57,10 +57,8 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v16
 
-      - name: Enable magic-nix-cache
-        uses: DeterminateSystems/magic-nix-cache-action@v9
-        with:
-          use-flakehub: false
+      - name: Enable FlakeHub cache
+        uses: DeterminateSystems/flakehub-cache-action@v2
 
       - name: Find KiCAD files
         id: find
@@ -223,10 +221,8 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v16
 
-      - name: Enable magic-nix-cache
-        uses: DeterminateSystems/magic-nix-cache-action@v9
-        with:
-          use-flakehub: false
+      - name: Enable FlakeHub cache
+        uses: DeterminateSystems/flakehub-cache-action@v2
 
       - name: Detect defines file
         id: defines
@@ -354,10 +350,8 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v16
 
-      - name: Enable magic-nix-cache
-        uses: DeterminateSystems/magic-nix-cache-action@v9
-        with:
-          use-flakehub: false
+      - name: Enable FlakeHub cache
+        uses: DeterminateSystems/flakehub-cache-action@v2
 
       - name: Detect defines file
         id: defines

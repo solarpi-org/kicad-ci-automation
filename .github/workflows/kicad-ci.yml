@@ -78,6 +78,19 @@ jobs:
           defines-file: ${{ inputs.defines-file }}
           project-path: ${{ inputs.project-path }}
 
+      - name: Build output prefix
+        id: prefix
+        run: |
+          SHA=$(git rev-parse --short=7 HEAD)
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PREFIX="pr-${{ github.event.number }}-${SHA}"
+          else
+            BRANCH="${GITHUB_REF_NAME//\//-}"
+            PREFIX="${BRANCH}-${SHA}"
+          fi
+          echo "value=$PREFIX" >> "$GITHUB_OUTPUT"
+          echo "Output prefix: $PREFIX"
+
       - name: Run kicad-ci (ERC + DRC + ODB++)
         id: kicad-ci
         env:
@@ -88,6 +101,7 @@ jobs:
           nix run "github:solarpi-org/kicad-ci-automation/${{ inputs.kicad-ci-ref }}#kicad-ci" -- \
             --project "${{ inputs.project-path }}" \
             --output  ci-output \
+            --prefix  "${{ steps.prefix.outputs.value }}" \
             --skip-diff \
             ${{ env.DEFINES_ARG }} \
             || true   # never hard-fail; we surface violations via comment
@@ -96,7 +110,7 @@ jobs:
         id: erc
         run: |
           COUNT=0
-          for REPORT in ci-output/erc-*-report.json; do
+          for REPORT in ci-output/*-erc-report.json; do
             [ -f "$REPORT" ] || continue
             N=$(jq '[.sheets[].violations | length] | add // 0' "$REPORT")
             COUNT=$((COUNT + N))
@@ -108,7 +122,7 @@ jobs:
         id: drc
         run: |
           COUNT=0
-          for REPORT in ci-output/drc-*-report.json; do
+          for REPORT in ci-output/*-drc-report.json; do
             [ -f "$REPORT" ] || continue
             N=$(jq '[.violations, .unconnected_items, .schematic_parity] | map(length) | add // 0' "$REPORT")
             COUNT=$((COUNT + N))
@@ -122,19 +136,18 @@ jobs:
         with:
           name: erc-drc-reports
           path: |
-            ci-output/erc-*-report.json
-            ci-output/drc-*-report.json
-            ci-output/erc-*-log.txt
-            ci-output/drc-*-log.txt
+            ci-output/*-erc-report.json
+            ci-output/*-drc-report.json
+            ci-output/*-erc.log
+            ci-output/*-drc.log
           retention-days: 30
 
       - name: Upload ODB++
-        # Only upload ODB on pushes to main/master (not PRs)
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: odb-plus-plus
-          path: ci-output/odb-*.zip
+          path: ci-output/*-odb.zip
           retention-days: 90
 
       - name: Post PR comment
@@ -229,6 +242,14 @@ jobs:
           echo "sha=$BASE" >> "$GITHUB_OUTPUT"
           echo "Merge base: $BASE"
 
+      - name: Build output prefix
+        id: prefix
+        run: |
+          SHA=$(git rev-parse --short=7 HEAD)
+          PREFIX="pr-${{ github.event.number }}-${SHA}"
+          echo "value=$PREFIX" >> "$GITHUB_OUTPUT"
+          echo "Output prefix: $PREFIX"
+
       - name: Run visual diff
         id: diff
         env:
@@ -238,6 +259,7 @@ jobs:
           nix run "github:solarpi-org/kicad-ci-automation/${{ inputs.kicad-ci-ref }}#kicad-ci" -- \
             --project  "${{ inputs.project-path }}" \
             --output   ci-output \
+            --prefix   "${{ steps.prefix.outputs.value }}" \
             --compare  "${{ steps.base.outputs.sha }}" \
             --skip-erc \
             --skip-drc \
@@ -246,25 +268,25 @@ jobs:
             || true
 
           # Surface whether artifacts were produced
-          if compgen -G "ci-output/artifacts-*/pcb-diff.pdf" > /dev/null; then
+          if compgen -G "ci-output/*-pcb-diff.pdf" > /dev/null; then
             echo "has-pcb-diff=true"  >> "$GITHUB_OUTPUT"
           else
             echo "has-pcb-diff=false" >> "$GITHUB_OUTPUT"
           fi
-          if compgen -G "ci-output/artifacts-*/schematic-diff.pdf" > /dev/null; then
+          if compgen -G "ci-output/*-schematic-diff.pdf" > /dev/null; then
             echo "has-sch-diff=true"  >> "$GITHUB_OUTPUT"
           else
             echo "has-sch-diff=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Upload diff artifacts
-        if: steps.diff.outputs.has-pcb-diff == 'true' || steps.diff.outputs.has-sch-diff == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: visual-diff
           path: |
-            ci-output/artifacts-*/pcb-diff.pdf
-            ci-output/artifacts-*/schematic-diff.pdf
+            ci-output/*-pcb-diff.pdf
+            ci-output/*-schematic-diff.pdf
             ci-output/artifacts-*/triptych-svgs/
           retention-days: 30
 
@@ -315,9 +337,9 @@ jobs:
               });
             }
 
-  # ── Release: attach ODB++ to GitHub Release ───────────────────────────────
+  # ── Release: attach ODB++ and visual diff to GitHub Release ─────────────
   release:
-    name: Attach ODB++ to Release
+    name: Release Artifacts
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     permissions:
@@ -344,20 +366,52 @@ jobs:
           defines-file: ${{ inputs.defines-file }}
           project-path: ${{ inputs.project-path }}
 
-      - name: Export ODB++
+      - name: Find previous release tag
+        id: prev-tag
+        run: |
+          CURRENT_TAG="${{ github.event.release.tag_name }}"
+          echo "Current release: $CURRENT_TAG"
+
+          # List tags sorted by version (most recent first), skip the current one
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${CURRENT_TAG}$" | head -1)
+
+          if [ -n "$PREV_TAG" ]; then
+            echo "Previous release: $PREV_TAG"
+            echo "tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
+            echo "has-prev=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No previous release tag found — skipping diff"
+            echo "has-prev=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build output prefix
+        id: prefix
+        run: |
+          SHA=$(git rev-parse --short=7 HEAD)
+          TAG="${{ github.event.release.tag_name }}"
+          PREFIX="${TAG}-${SHA}"
+          echo "value=$PREFIX" >> "$GITHUB_OUTPUT"
+          echo "Output prefix: $PREFIX"
+
+      - name: Run full CI pipeline
         env:
           DEFINES_ARG: ${{ steps.defines.outputs.path != '' && format('--defines {0}', steps.defines.outputs.path) || '' }}
+          COMPARE_ARG: ${{ steps.prev-tag.outputs.has-prev == 'true' && format('--compare {0}', steps.prev-tag.outputs.tag) || '--skip-diff' }}
         run: |
           mkdir -p ci-output
           nix run "github:solarpi-org/kicad-ci-automation/${{ inputs.kicad-ci-ref }}#kicad-ci" -- \
             --project "${{ inputs.project-path }}" \
             --output  ci-output \
-            --skip-erc \
-            --skip-drc \
-            --skip-diff \
+            --prefix  "${{ steps.prefix.outputs.value }}" \
+            ${{ env.COMPARE_ARG }} \
             ${{ env.DEFINES_ARG }}
 
-      - name: Upload ODB++ to release
+      - name: Upload all artifacts to release
         uses: softprops/action-gh-release@v2
         with:
-          files: ci-output/odb-*.zip
+          files: |
+            ci-output/*.zip
+            ci-output/*-erc-report.json
+            ci-output/*-drc-report.json
+            ci-output/*-pcb-diff.pdf
+            ci-output/*-schematic-diff.pdf

@@ -6,6 +6,7 @@ PROJECT_DIR="."
 OUTPUT_DIR="./ci-output"
 COMPARE_REF=""
 TEMPLATE_DEFINES=""
+OUTPUT_PREFIX=""
 SKIP_ERC=false
 SKIP_DRC=false
 SKIP_ODB=false
@@ -53,6 +54,7 @@ OPTIONS:
   -o, --output DIR        Output directory (default: ./ci-output)
   -c, --compare REF       Git reference to compare against (for kicad-diff)
   -d, --defines FILE      Custom template definitions file (JSON, YAML, or KEY=VALUE)
+  -n, --prefix PREFIX     Prefix for output filenames (e.g. "pr-42-abc1234")
   --skip-erc              Skip Electrical Rules Check
   --skip-drc              Skip Design Rules Check
   --skip-odb              Skip ODB++ export
@@ -91,6 +93,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -d|--defines)
       TEMPLATE_DEFINES="$2"
+      shift 2
+      ;;
+    -n|--prefix)
+      OUTPUT_PREFIX="$2"
       shift 2
       ;;
     --skip-erc)
@@ -138,6 +144,20 @@ fi
 # Create output directory and make path absolute
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
+
+# Build output filename: prefix-boardname-suffix.ext or boardname-suffix.ext
+outname() {
+  # Usage: outname <board_stem> <suffix> <ext>
+  #   e.g. outname "mgn1-adapter" "erc-report" "json"
+  #     -> "pr-42-abc1234-mgn1-adapter-erc-report.json" (with prefix)
+  #     -> "mgn1-adapter-erc-report.json"                (without)
+  local stem="$1" suffix="$2" ext="$3"
+  if [[ -n "$OUTPUT_PREFIX" ]]; then
+    echo "${OUTPUT_PREFIX}-${stem}-${suffix}.${ext}"
+  else
+    echo "${stem}-${suffix}.${ext}"
+  fi
+}
 
 # Find KiCAD project files
 print_header "Finding KiCAD Project Files"
@@ -214,11 +234,11 @@ if [[ "$SKIP_TEMPLATE" == false ]]; then
   for KICAD_PCB in "${KICAD_PCBS[@]}"; do
     PCB_STEM=$(basename "${KICAD_PCB%.kicad_pcb}")
     print_info "Processing PCB: $KICAD_PCB"
-    if kicad-template "$KICAD_PCB" "${TEMPLATE_ARGS[@]}" 2>&1 | tee "$OUTPUT_DIR/template-pcb-${PCB_STEM}-log.txt"; then
+    if kicad-template "$KICAD_PCB" "${TEMPLATE_ARGS[@]}" 2>&1 | tee "$OUTPUT_DIR/$(outname "$PCB_STEM" template-pcb log)"; then
       print_success "PCB template replacement completed: $PCB_STEM"
       TEMPLATE_MODIFIED_FILES+=("$KICAD_PCB")
     else
-      print_warning "PCB template replacement had issues (see $OUTPUT_DIR/template-pcb-${PCB_STEM}-log.txt)"
+      print_warning "PCB template replacement had issues"
     fi
   done
 
@@ -226,11 +246,11 @@ if [[ "$SKIP_TEMPLATE" == false ]]; then
   for KICAD_SCH in "${KICAD_SCHS[@]}"; do
     SCH_STEM=$(basename "${KICAD_SCH%.kicad_sch}")
     print_info "Processing schematic: $KICAD_SCH"
-    if kicad-template "$KICAD_SCH" "${TEMPLATE_ARGS[@]}" 2>&1 | tee "$OUTPUT_DIR/template-sch-${SCH_STEM}-log.txt"; then
+    if kicad-template "$KICAD_SCH" "${TEMPLATE_ARGS[@]}" 2>&1 | tee "$OUTPUT_DIR/$(outname "$SCH_STEM" template-sch log)"; then
       print_success "Schematic template replacement completed: $SCH_STEM"
       TEMPLATE_MODIFIED_FILES+=("$KICAD_SCH")
     else
-      print_warning "Schematic template replacement had issues (see $OUTPUT_DIR/template-sch-${SCH_STEM}-log.txt)"
+      print_warning "Schematic template replacement had issues"
     fi
   done
 
@@ -290,14 +310,14 @@ if [[ "$SKIP_ERC" == false ]] && [[ ${#KICAD_SCHS[@]} -gt 0 ]]; then
 
   for KICAD_SCH in "${KICAD_SCHS[@]}"; do
     SCH_STEM=$(basename "${KICAD_SCH%.kicad_sch}")
-    ERC_OUTPUT="$OUTPUT_DIR/erc-${SCH_STEM}-report.json"
+    ERC_OUTPUT="$OUTPUT_DIR/$(outname "$SCH_STEM" erc-report json)"
     print_info "Running ERC on: $KICAD_SCH"
 
     if kicad-cli sch erc \
       --format json \
       --output "$ERC_OUTPUT" \
       --exit-code-violations \
-      "$KICAD_SCH" 2>&1 | tee "$OUTPUT_DIR/erc-${SCH_STEM}-log.txt"; then
+      "$KICAD_SCH" 2>&1 | tee "$OUTPUT_DIR/$(outname "$SCH_STEM" erc log)"; then
       print_success "ERC passed: $SCH_STEM"
     else
       ERC_EXIT_CODE=$?
@@ -327,14 +347,14 @@ if [[ "$SKIP_DRC" == false ]] && [[ ${#KICAD_PCBS[@]} -gt 0 ]]; then
 
   for KICAD_PCB in "${KICAD_PCBS[@]}"; do
     PCB_STEM=$(basename "${KICAD_PCB%.kicad_pcb}")
-    DRC_OUTPUT="$OUTPUT_DIR/drc-${PCB_STEM}-report.json"
+    DRC_OUTPUT="$OUTPUT_DIR/$(outname "$PCB_STEM" drc-report json)"
     print_info "Running DRC on: $KICAD_PCB"
 
     if kicad-cli pcb drc \
       --format json \
       --output "$DRC_OUTPUT" \
       --exit-code-violations \
-      "$KICAD_PCB" 2>&1 | tee "$OUTPUT_DIR/drc-${PCB_STEM}-log.txt"; then
+      "$KICAD_PCB" 2>&1 | tee "$OUTPUT_DIR/$(outname "$PCB_STEM" drc log)"; then
       print_success "DRC passed: $PCB_STEM"
     else
       DRC_EXIT_CODE=$?
@@ -364,12 +384,12 @@ if [[ "$SKIP_ODB" == false ]] && [[ ${#KICAD_PCBS[@]} -gt 0 ]]; then
 
   for KICAD_PCB in "${KICAD_PCBS[@]}"; do
     PCB_STEM=$(basename "${KICAD_PCB%.kicad_pcb}")
-    ODB_OUTPUT="$OUTPUT_DIR/odb-${PCB_STEM}.zip"
+    ODB_OUTPUT="$OUTPUT_DIR/$(outname "$PCB_STEM" odb zip)"
     print_info "Exporting ODB++ for: $KICAD_PCB"
 
     if kicad-cli pcb export odb \
       --output "$ODB_OUTPUT" \
-      "$KICAD_PCB" 2>&1 | tee "$OUTPUT_DIR/odb-${PCB_STEM}-log.txt"; then
+      "$KICAD_PCB" 2>&1 | tee "$OUTPUT_DIR/$(outname "$PCB_STEM" odb log)"; then
       print_success "ODB++ export completed: $PCB_STEM"
       print_info "Output: $ODB_OUTPUT"
     else
@@ -403,7 +423,7 @@ if [[ "$SKIP_DIFF" == false ]] && [[ ${#KICAD_PCBS[@]} -gt 0 ]] && [[ -n "$COMPA
     # Run kidiff from project directory
     pushd "$PROJECT_DIR" > /dev/null
 
-    DIFF_LOG="$OUTPUT_DIR/diff-${PCB_STEM}-log.txt"
+    DIFF_LOG="$OUTPUT_DIR/$(outname "$PCB_STEM" diff log)"
     DIFF_SUCCESS=false
 
     if kidiff \
@@ -437,19 +457,21 @@ if [[ "$SKIP_DIFF" == false ]] && [[ ${#KICAD_PCBS[@]} -gt 0 ]] && [[ -n "$COMPA
       print_header "Generating PDF Artifacts for $PCB_STEM"
       ARTIFACTS_OUTPUT="$OUTPUT_DIR/artifacts-${PCB_STEM}"
 
-      if generate-diff-artifacts "$DIFF_OUTPUT" -o "$ARTIFACTS_OUTPUT" 2>&1 | tee "$OUTPUT_DIR/artifacts-${PCB_STEM}-log.txt"; then
+      if generate-diff-artifacts "$DIFF_OUTPUT" -o "$ARTIFACTS_OUTPUT" 2>&1 | tee "$OUTPUT_DIR/$(outname "$PCB_STEM" artifacts log)"; then
         print_success "PDF artifacts generated: $PCB_STEM"
         print_info "Triptych SVGs: $ARTIFACTS_OUTPUT/triptych-svgs/"
 
+        # Rename final PDFs with prefix
         if [[ -f "$ARTIFACTS_OUTPUT/pcb-diff.pdf" ]]; then
-          print_info "PCB PDF: $ARTIFACTS_OUTPUT/pcb-diff.pdf"
+          mv "$ARTIFACTS_OUTPUT/pcb-diff.pdf" "$OUTPUT_DIR/$(outname "$PCB_STEM" pcb-diff pdf)"
+          print_info "PCB PDF: $(outname "$PCB_STEM" pcb-diff pdf)"
         fi
-
         if [[ -f "$ARTIFACTS_OUTPUT/schematic-diff.pdf" ]]; then
-          print_info "Schematic PDF: $ARTIFACTS_OUTPUT/schematic-diff.pdf"
+          mv "$ARTIFACTS_OUTPUT/schematic-diff.pdf" "$OUTPUT_DIR/$(outname "$PCB_STEM" schematic-diff pdf)"
+          print_info "Schematic PDF: $(outname "$PCB_STEM" schematic-diff pdf)"
         fi
       else
-        print_warning "PDF artifact generation had issues for $PCB_STEM (check $OUTPUT_DIR/artifacts-${PCB_STEM}-log.txt)"
+        print_warning "PDF artifact generation had issues for $PCB_STEM"
         print_info "Triptych SVGs may still be available in: $ARTIFACTS_OUTPUT/triptych-svgs/"
       fi
     fi

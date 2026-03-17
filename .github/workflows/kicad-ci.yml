@@ -39,6 +39,7 @@ jobs:
     name: ERC & DRC
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: read
       pull-requests: write
 
@@ -57,8 +58,16 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v16
 
-      - name: Enable FlakeHub cache
-        uses: DeterminateSystems/flakehub-cache-action@v2
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 2G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-last-accessed: P7D
+          purge-primary-key: never
 
       - name: Find KiCAD files
         id: find
@@ -209,6 +218,7 @@ jobs:
     # Only run on PRs and only when enabled
     if: github.event_name == 'pull_request' && inputs.enable-diff
     permissions:
+      actions: write
       contents: read
       pull-requests: write
 
@@ -221,8 +231,16 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v16
 
-      - name: Enable FlakeHub cache
-        uses: DeterminateSystems/flakehub-cache-action@v2
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 2G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-last-accessed: P7D
+          purge-primary-key: never
 
       - name: Detect defines file
         id: defines
@@ -339,6 +357,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     permissions:
+      actions: write
       contents: write
 
     steps:
@@ -350,8 +369,16 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v16
 
-      - name: Enable FlakeHub cache
-        uses: DeterminateSystems/flakehub-cache-action@v2
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 2G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-last-accessed: P7D
+          purge-primary-key: never
 
       - name: Detect defines file
         id: defines

@@ -5,3 +5,4 @@ ci-output/
 __pycache__/
 sbom.*
 .sbom-hash
+http_cache.sqlite

@@ -4,41 +4,16 @@ Provides HSL/RGB conversion, CSS color parsing, complementary color
 calculation, and additive tinting used by the triptych SVG generator.
 """
 
-try:
-    from PIL import ImageColor
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
+from PIL import ImageColor
 
 
 def parse_css_color(color_str):
+    """Parse any valid CSS color string and return RGB tuple (0-255).
+
+    Supports hex, rgb(), rgba(), hsl(), hsla(), named colors, etc.
     """
-    Parse any valid CSS color string and return RGB tuple (0-255).
-
-    Uses PIL's ImageColor parser which supports all CSS color formats:
-    hex, rgb(), rgba(), hsl(), hsla(), named colors, etc.
-
-    Args:
-        color_str: Any valid CSS color string
-
-    Returns:
-        Tuple of (r, g, b) values in 0-255 range
-    """
-    if HAS_PIL:
-        rgb = ImageColor.getrgb(color_str)
-        return rgb[:3] if len(rgb) >= 3 else rgb
-    else:
-        color_str = color_str.strip()
-        if color_str.startswith('#'):
-            hex_clean = color_str.lstrip('#')
-            if len(hex_clean) == 3:
-                hex_clean = ''.join([c*2 for c in hex_clean])
-            if len(hex_clean) == 6:
-                r = int(hex_clean[0:2], 16)
-                g = int(hex_clean[2:4], 16)
-                b = int(hex_clean[4:6], 16)
-                return (r, g, b)
-        raise ImportError("Pillow (PIL) is required for CSS color parsing.")
+    rgb = ImageColor.getrgb(color_str)
+    return rgb[:3] if len(rgb) >= 3 else rgb
 
 
 def hsl_to_rgb(h, s, l):

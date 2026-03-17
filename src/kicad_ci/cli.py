@@ -91,6 +91,14 @@ def main():
         '--no-pdf', action='store_true',
         help='Skip PDF generation, only create triptych SVGs',
     )
+    parser.add_argument(
+        '--new-ref', type=str, default=None,
+        help='Directory name of the new (PR head) commit in kidiff output',
+    )
+    parser.add_argument(
+        '--old-ref', type=str, default=None,
+        help='Directory name of the old (base) commit in kidiff output',
+    )
     args = parser.parse_args()
 
     diff_dir = Path(args.diff_dir)
@@ -105,7 +113,7 @@ def main():
     triptych_dir.mkdir(exist_ok=True)
 
     print("Finding SVG pairs...")
-    pairs = find_svg_pairs(diff_dir)
+    pairs = find_svg_pairs(diff_dir, new_ref=args.new_ref, old_ref=args.old_ref)
 
     if not pairs['pcb'] and not pairs['sch']:
         print("No SVG pairs found!")

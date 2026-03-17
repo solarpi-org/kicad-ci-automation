@@ -138,19 +138,27 @@ def create_triptych_svg(old_svg_path, new_svg_path, output_svg_path, title=""):
     print(f"  Created: {output_svg_path}")
 
 
+_KNOWN_NON_COMMIT_DIRS = {'web'}
+
+
 def _is_commit_dir(name):
-    """Check if a directory name looks like a git commit hash or HEAD."""
-    if name == 'HEAD':
-        return True
-    # Full or abbreviated hex SHA
-    return len(name) >= 7 and all(c in '0123456789abcdef' for c in name)
+    """Check if a directory name looks like a kidiff commit output directory.
+
+    Accepts git SHAs, branch names, 'HEAD', 'local', or any name that isn't
+    a known kidiff internal directory (e.g. 'web').
+    """
+    return name not in _KNOWN_NON_COMMIT_DIRS
 
 
-def find_svg_pairs(diff_output_dir):
+def find_svg_pairs(diff_output_dir, new_ref=None, old_ref=None):
     """Find matching old/new SVG pairs in a kidiff output directory.
 
     Args:
-        diff_output_dir: Root directory containing commit-hash subdirectories
+        diff_output_dir: Root directory containing commit subdirectories
+        new_ref: Name of the new (PR head / -a) commit directory. If None,
+                 falls back to 'HEAD' or alphabetical ordering.
+        old_ref: Name of the old (base / -b) commit directory. If None,
+                 the remaining directory is used.
 
     Returns:
         Dict with 'pcb' and 'sch' keys, each a list of (old, new, name) tuples
@@ -160,10 +168,38 @@ def find_svg_pairs(diff_output_dir):
 
     if len(subdirs) < 2:
         print(f"Error: Expected 2 commit directories in {diff_output_dir}, found {len(subdirs)}")
+        if subdirs:
+            print(f"  Found: {[d.name for d in subdirs]}")
+        all_dirs = [d.name for d in Path(diff_output_dir).iterdir() if d.is_dir()]
+        if all_dirs:
+            print(f"  All directories present: {all_dirs}")
         return {'pcb': [], 'sch': []}
 
-    old_dir = next(d for d in subdirs if d.name != 'HEAD')
-    new_dir = next(d for d in subdirs if d.name == 'HEAD')
+    # Resolve new/old directories using explicit refs, or fall back to
+    # convention: 'HEAD' is new, everything else is old.
+    dir_by_name = {d.name: d for d in subdirs}
+
+    if new_ref and new_ref in dir_by_name:
+        new_dir = dir_by_name[new_ref]
+    elif 'HEAD' in dir_by_name:
+        new_dir = dir_by_name['HEAD']
+    else:
+        new_dir = None
+
+    if old_ref and old_ref in dir_by_name:
+        old_dir = dir_by_name[old_ref]
+    elif new_dir:
+        # Old dir is whichever isn't the new dir
+        old_dir = next((d for d in subdirs if d != new_dir), None)
+    else:
+        old_dir = None
+
+    # Last resort: sort alphabetically and pick first=old, second=new
+    if not old_dir or not new_dir:
+        sorted_dirs = sorted(subdirs, key=lambda d: d.name)
+        old_dir = old_dir or sorted_dirs[0]
+        new_dir = new_dir or sorted_dirs[1]
+
     print(f"Old version: {old_dir.name}")
     print(f"New version: {new_dir.name}")
 

@@ -536,7 +536,7 @@ if [[ "$SKIP_DIFF" == false ]] && [[ ${#KICAD_PCBS[@]} -gt 0 ]] && [[ -n "$COMPA
       print_header "Generating PDF Artifacts for $PCB_STEM"
       ARTIFACTS_OUTPUT="$OUTPUT_DIR/artifacts-${PCB_STEM}"
 
-      if generate-diff-artifacts "$DIFF_OUTPUT" -o "$ARTIFACTS_OUTPUT" 2>&1 | tee "$OUTPUT_DIR/$(outname "$PCB_STEM" artifacts log)"; then
+      if generate-diff-artifacts "$DIFF_OUTPUT" -o "$ARTIFACTS_OUTPUT" --new-ref "$DIFF_NEW_REF" --old-ref "$COMPARE_REF" 2>&1 | tee "$OUTPUT_DIR/$(outname "$PCB_STEM" artifacts log)"; then
         print_success "PDF artifacts generated: $PCB_STEM"
         print_info "Triptych SVGs: $ARTIFACTS_OUTPUT/triptych-svgs/"
 

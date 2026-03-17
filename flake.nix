@@ -28,7 +28,6 @@
         python-with-packages = pkgs.python3.withPackages (ps: with ps; [
           pillow
           reportlab
-          svglib
           pypdf2
         ]);
 
@@ -61,7 +60,6 @@
             pkgs.findutils
             pkgs.python3
             pkgs.inkscape  # for SVG to PDF conversion (preserves vectors)
-            pkgs.librsvg  # for rsvg-convert (fallback)
             pkgs.poppler-utils  # for pdfunite and pdfinfo
             pkgs.ghostscript  # for PDF operations and cropping
           ];

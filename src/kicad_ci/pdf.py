@@ -5,8 +5,14 @@ ghostscript bbox detection + PyPDF2, and final multi-page assembly
 via pdfunite.
 """
 
+import io
 import subprocess
 from pathlib import Path
+
+from PyPDF2 import PdfReader, PdfWriter
+from PyPDF2.generic import RectangleObject
+from reportlab.pdfgen import canvas
+from reportlab.lib.colors import black
 
 
 def svg_to_pdf(svg_path, pdf_path):
@@ -61,15 +67,8 @@ def calculate_optimal_footer_font_size(pdf_files, footer_texts):
     """Find the largest font size that fits the longest text in the narrowest page.
 
     Returns:
-        Font size in points, or None if deps are missing
+        Font size in points, or None on failure
     """
-    try:
-        from PyPDF2 import PdfReader
-        from reportlab.pdfgen import canvas
-        import io
-    except ImportError:
-        return None
-
     if not pdf_files or not footer_texts:
         return None
 
@@ -115,15 +114,6 @@ def add_footer_to_pdf(pdf_path, footer_text, font_size=None):
     Returns:
         True on success
     """
-    try:
-        from PyPDF2 import PdfReader, PdfWriter
-        from reportlab.pdfgen import canvas
-        from reportlab.lib.colors import black
-        import io
-    except ImportError:
-        print("  Warning: Cannot add footer, missing dependencies")
-        return False
-
     try:
         pdf_path = Path(pdf_path)
         reader = PdfReader(str(pdf_path))
@@ -184,13 +174,6 @@ def crop_pdfs_uniform(pdf_files, margin=5, footer_font_size=None):
         footer_font_size: If set, reserve extra bottom space for footers
     """
     if not pdf_files:
-        return
-
-    try:
-        from PyPDF2 import PdfReader, PdfWriter
-        from PyPDF2.generic import RectangleObject
-    except ImportError:
-        print("  Warning: PyPDF2 not available, skipping PDF cropping")
         return
 
     MAX_WIDTH, MAX_HEIGHT = 297, 210

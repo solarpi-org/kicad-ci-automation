@@ -12,6 +12,7 @@ SKIP_DRC=false
 SKIP_ODB=false
 SKIP_DIFF=false
 SKIP_TEMPLATE=false
+SKIP_PLOTS=false
 EXIT_ON_ERROR=false
 
 # Color codes for output
@@ -60,6 +61,7 @@ OPTIONS:
   --skip-odb              Skip ODB++ export
   --skip-diff             Skip visual diff generation
   --skip-template         Skip template placeholder replacement
+  --skip-plots            Skip schematic/PCB PDF plot export
   --exit-on-error         Exit immediately on first error (default: continue all checks)
   -h, --help              Show this help message
 
@@ -117,6 +119,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-template)
       SKIP_TEMPLATE=true
+      shift
+      ;;
+    --skip-plots)
+      SKIP_PLOTS=true
       shift
       ;;
     --exit-on-error)
@@ -402,6 +408,64 @@ if [[ "$SKIP_ODB" == false ]] && [[ ${#KICAD_PCBS[@]} -gt 0 ]]; then
   done
 elif [[ "$SKIP_ODB" == false ]]; then
   print_warning "Skipping ODB++ export: No PCB files found"
+fi
+
+# Export schematic and PCB PDFs
+if [[ "$SKIP_PLOTS" == false ]]; then
+  if [[ ${#KICAD_SCHS[@]} -gt 0 ]]; then
+    print_header "Exporting Schematic PDFs"
+
+    for KICAD_SCH in "${KICAD_SCHS[@]}"; do
+      SCH_STEM=$(basename "${KICAD_SCH%.kicad_sch}")
+      SCH_PDF="$OUTPUT_DIR/$(outname "$SCH_STEM" schematic pdf)"
+      print_info "Exporting schematic PDF for: $KICAD_SCH"
+
+      if kicad-cli sch export pdf \
+        --output "$SCH_PDF" \
+        --black-and-white \
+        "$KICAD_SCH" 2>&1 | tee "$OUTPUT_DIR/$(outname "$SCH_STEM" schematic-pdf log)"; then
+        print_success "Schematic PDF export completed: $SCH_STEM"
+        print_info "Output: $SCH_PDF"
+      else
+        print_error "Schematic PDF export failed for $SCH_STEM"
+        OVERALL_STATUS=1
+
+        if [[ "$EXIT_ON_ERROR" == true ]]; then
+          exit 1
+        fi
+      fi
+    done
+  else
+    print_warning "Skipping schematic PDF export: No schematic files found"
+  fi
+
+  if [[ ${#KICAD_PCBS[@]} -gt 0 ]]; then
+    print_header "Exporting PCB PDFs"
+
+    for KICAD_PCB in "${KICAD_PCBS[@]}"; do
+      PCB_STEM=$(basename "${KICAD_PCB%.kicad_pcb}")
+      PCB_PDF="$OUTPUT_DIR/$(outname "$PCB_STEM" pcb pdf)"
+      print_info "Exporting PCB PDF for: $KICAD_PCB"
+
+      if kicad-cli pcb export pdf \
+        --output "$PCB_PDF" \
+        --layers "F.Cu,B.Cu,F.Silkscreen,B.Silkscreen,Edge.Cuts" \
+        --include-border-title \
+        "$KICAD_PCB" 2>&1 | tee "$OUTPUT_DIR/$(outname "$PCB_STEM" pcb-pdf log)"; then
+        print_success "PCB PDF export completed: $PCB_STEM"
+        print_info "Output: $PCB_PDF"
+      else
+        print_error "PCB PDF export failed for $PCB_STEM"
+        OVERALL_STATUS=1
+
+        if [[ "$EXIT_ON_ERROR" == true ]]; then
+          exit 1
+        fi
+      fi
+    done
+  else
+    print_warning "Skipping PCB PDF export: No PCB files found"
+  fi
 fi
 
 # Run kicad-diff

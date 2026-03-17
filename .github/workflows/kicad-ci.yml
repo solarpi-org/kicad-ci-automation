@@ -117,12 +117,13 @@ jobs:
           DEFINES_ARG: ${{ steps.defines.outputs.path != '' && format('--defines {0}', steps.defines.outputs.path) || '' }}
         run: |
           mkdir -p ci-output
-          # Run ERC+DRC+ODB, skip diff (handled in separate job)
+          # Run ERC+DRC+ODB, skip diff and plots (handled in separate jobs / release)
           nix run "github:solarpi-org/kicad-ci-automation/${{ inputs.kicad-ci-ref }}#kicad-ci" -- \
             --project "${{ inputs.project-path }}" \
             --output  ci-output \
             --prefix  "${{ steps.prefix.outputs.value }}" \
             --skip-diff \
+            --skip-plots \
             ${{ env.DEFINES_ARG }} \
             || true   # never hard-fail; we surface violations via comment
 
@@ -304,6 +305,7 @@ jobs:
             --skip-erc \
             --skip-drc \
             --skip-odb \
+            --skip-plots \
             ${{ env.DEFINES_ARG }} \
             || true
 
@@ -506,6 +508,8 @@ jobs:
             ci-output/*-drc-report.json
             ci-output/*-pcb-diff.pdf
             ci-output/*-schematic-diff.pdf
+            ci-output/*-schematic.pdf
+            ci-output/*-pcb.pdf
             ci-output/sbom.cdx.json
             ci-output/sbom.spdx.json
 
